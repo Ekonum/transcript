@@ -132,7 +132,7 @@ digest OCI nouvellement inspecté. Aucun rerun, déploiement ou relevé natif n'
 été effectué pour le lot documentaire.
 
 Le workflow indique que l'ancien `registry.robin-joseph.fr` n'est plus alimenté.
-La recherche ciblée des sources versionnées `.github/`, `web/docker-compose.yml`,
+La recherche ciblée au **commit `main` de départ** dans `.github/`, `web/docker-compose.yml`,
 README et `web/docs/` ne trouve aucune référence active à cet ancien registre :
 la seule occurrence est ce commentaire historique du workflow. Cela ne prouve pas
 l'absence de configurations externes ou d'anciens artefacts hors dépôt.
