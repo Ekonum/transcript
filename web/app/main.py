@@ -46,7 +46,8 @@ from cloud_transcription import (
 
 from .audio_parts import audio_parts
 from . import avancement
-from .auth import AccessVerifier, AuthError
+from .auth import AccessVerifier, AuthError, KeycloakVerifier
+from .user_identity import IdentityConflict
 from .chatter import ChatterError, composer
 from .coffre import Coffre, CoffreIndisponible
 from . import dashboard
@@ -293,6 +294,7 @@ def create_app(
     database: Database | None = None,
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
+    keycloak_verifier: KeycloakVerifier | None = None,
     odoo_factory=None,
     stockage_factory=None,
     google_opener=None,
@@ -308,6 +310,20 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
+    if config.auth_mode not in {"access-jwt", "keycloak-jwt"}:
+        raise RuntimeError("Mode d'authentification inconnu.")
+    if config.dev_mode and (config.auth_mode != "access-jwt" or config.keycloak_issuer
+                            or config.keycloak_audience or config.keycloak_authorized_party
+                            or config.keycloak_jwks_url
+                            or config.access_team_domain or config.access_aud):
+        raise RuntimeError("Le mode développement ne peut pas contourner une identité configurée.")
+    if config.keycloak_link_legacy and config.auth_mode != "keycloak-jwt":
+        raise RuntimeError("Le rapprochement Keycloak exige son mode explicite.")
+    keycloak = None
+    if config.auth_mode == "keycloak-jwt":
+        keycloak = keycloak_verifier or KeycloakVerifier(
+            config.keycloak_issuer, config.keycloak_audience,
+            config.keycloak_authorized_party, config.keycloak_jwks_url)
     euro = EuroRate(db, opener=fx_opener)
 
     etat_stockage: dict[str, Any] = {}
@@ -371,7 +387,7 @@ def create_app(
             login=login,
             api_key=coffre.dechiffrer(chiffree) if (login and chiffree) else "",
         )
-    if not access.configured and not config.dev_mode:
+    if config.auth_mode == "access-jwt" and not access.configured and not config.dev_mode:
         raise RuntimeError(
             "Cloudflare Access n'est pas configuré (EKOVIDEO_ACCESS_TEAM_DOMAIN "
             "et EKOVIDEO_ACCESS_AUD) et le mode développement est désactivé : "
@@ -399,7 +415,7 @@ def create_app(
     def current_user(request: Request) -> int:
         """Qui fait cette requête.
 
-        Deux voies. Un humain arrive avec un jeton Cloudflare Access ; un
+        Un humain arrive avec le jeton du mode configuré (Access ou Keycloak) ; un
         appel machine — script, intégration Odoo, serveur MCP — arrive
         avec un jeton d'API en `Authorization: Bearer`. Les deux
         aboutissent au même identifiant d'utilisateur, donc l'attribution
@@ -410,38 +426,39 @@ def create_app(
         qu'un jeton Access peut traîner dans un cookie et servir par
         accident.
         """
-        entete = request.headers.get("Authorization", "")
-        if entete.startswith("Bearer "):
-            owner = db.owner_for_api_token(entete[7:])
+        header = request.headers.get("Authorization", "")
+        is_bearer = header.startswith("Bearer ")
+        bearer = header[7:] if is_bearer else ""
+        if is_bearer and (config.auth_mode == "access-jwt" or bearer.startswith("ekt_")):
+            owner = db.owner_for_api_token(bearer)
             if owner is None:
-                raise HTTPException(
-                    status.HTTP_401_UNAUTHORIZED,
-                    "Jeton d'API inconnu ou révoqué.",
-                )
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Jeton d'API inconnu ou révoqué.")
+            request.state.identity_source = "api-token"
             return owner
-
         if config.dev_mode:
+            request.state.identity_source = "access-jwt"
             return db.user_id_for_email(config.dev_user_email)
-        token = request.headers.get("Cf-Access-Jwt-Assertion", "")
         try:
-            email = access.email_from_token(token)
+            if keycloak is not None:
+                identity = keycloak.identity_from_token(bearer)
+                owner = db.user_id_for_keycloak(identity, link_legacy=config.keycloak_link_legacy)
+                request.state.identity_source = "keycloak-jwt"
+                return owner
+            email = access.email_from_token(request.headers.get("Cf-Access-Jwt-Assertion", ""))
+            owner = db.user_id_for_access_email(email)
+            request.state.identity_source = "access-jwt"
+            return owner
         except AuthError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-        return db.user_id_for_email(email)
+        except IdentityConflict as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
 
     def human_user(request: Request) -> int:
-        """Comme ci-dessus, mais refuse un jeton d'API.
-
-        Garde la gestion des jetons hors de portée des jetons eux-mêmes :
-        un jeton volé ne doit pas pouvoir s'en fabriquer d'autres, ni
-        révoquer ceux des collègues.
-        """
-        if request.headers.get("Authorization", "").startswith("Bearer "):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "La gestion des jetons demande une connexion personnelle.",
-            )
-        return current_user(request)
+        owner = current_user(request)
+        if request.state.identity_source == "api-token":
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "La gestion des jetons demande une connexion personnelle.")
+        return owner
 
     def owned_job(job_id: int, owner_id: int) -> dict[str, Any]:
         job = db.get_job(job_id)
@@ -1372,10 +1389,10 @@ def create_app(
         la première chose qu'on cherche sur un outil d'équipe, et son
         absence rendait la page anonyme.
         """
-        par_jeton = request.headers.get("Authorization", "").startswith("Bearer ")
         return {
-            "email": db.email_for_user(owner_id),
-            "via": "jeton d'API" if par_jeton else "Cloudflare Access",
+            **db.user_profile(owner_id),
+            "via": {"api-token": "jeton d'API", "keycloak-jwt": "Keycloak"}
+                .get(request.state.identity_source, "Cloudflare Access"),
         }
 
     @app.get("/api/me/stats")
