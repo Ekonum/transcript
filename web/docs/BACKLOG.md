@@ -56,6 +56,16 @@ Les éditeurs sans transcription sont masqués. Aucun nouveau réglage permanent
 
 ## Prochains sujets
 
+### Préparation en revue — identité Keycloak (29/10, portail 1888)
+
+Le rapprochement initial sur e-mail vérifié conserve le numéro local du compte,
+puis le couple issuer/sub Keycloak le désigne durablement. Les collisions sont
+refusées ; changement d'adresse, conservation des données et retour sur copie
+synthétique sont éprouvés. La file sauvegardée garde son espace, sans nouvel écran.
+Le mode reste désactivé par défaut ; transport navigateur, politique du client
+interactif et activation restent à valider avec le portail. Aucune identité
+ou donnée réelle modifiée. Voir [le périmètre et les preuves](KEYCLOAK-IDENTITY.md).
+
 | # | Sujet | État |
 |---|-------|------|
 | 1 | Accès Odoo relayé par le broker | en attente du portail |
