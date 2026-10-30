@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
-import { depuisUtc, horodatage, usd, jour, mo } from '../format.js';
-import { alleger, useArchivage } from '../archivage.js';
+import { depuisUtc, duree as dureeLisible, horodatage, usd, jour, mo } from '../format.js';
+import { alleger, joindre, useArchivage } from '../archivage.js';
+import { correspondance } from '../joindre.js';
+import { sonderDuree } from '../sonde.js';
+import { isAudioFile } from '../organizer.js';
 import { AvancementArchivage } from './Nouveau.jsx';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { resumeArchived } from '../resume.js';
@@ -423,15 +426,26 @@ function Video({ jobId, video, filename, duree, parts, meetingDate, surMaj, lect
   }, [tache?.etape]);
 
   if (tache && tache.etape !== 'termine') {
-    return <div className="mt-3"><AvancementArchivage tache={tache} /></div>;
+    return (
+      <div className="mt-3">
+        <AvancementArchivage tache={tache} />
+        {tache.etape === 'erreur' && !video?.presente
+          ? <Joindre jobId={jobId} duree={duree} audio={audio} /> : null}
+      </div>
+    );
   }
   if (!video?.presente) {
-    return video?.en_cours ? (
-      <p className="mt-3 text-ekn-sm text-ekn-text-muted">
-        L'envoi de la vidéo a été interrompu (onglet fermé ?). La transcription,
-        elle, est complète.
-      </p>
-    ) : null;
+    return (
+      <div className="mt-3">
+        {video?.en_cours ? (
+          <p className="text-ekn-sm text-ekn-text-muted">
+            L'envoi de l'enregistrement a été interrompu (onglet fermé ?). La transcription,
+            elle, est complète.
+          </p>
+        ) : null}
+        <Joindre jobId={jobId} duree={duree} audio={audio} />
+      </div>
+    );
   }
 
   if (etape === 'lecture') {
@@ -521,6 +535,68 @@ function Video({ jobId, video, filename, duree, parts, meetingDate, surMaj, lect
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Une réunion sans enregistrement archivé : on peut le joindre après
+ *  coup, depuis le poste qui l'a gardé. Les durées sont comparées avant
+ *  l'envoi ; un écart se confirme, il n'interdit rien. */
+function Joindre({ jobId, duree, audio }) {
+  const entree = useRef(null);
+  const [etat, setEtat] = useState({ etape: 'repos' }); // repos → sonde → doute
+  const envoyer = (fichier) => {
+    setEtat({ etape: 'repos' });
+    joindre(jobId, fichier, isAudioFile(fichier));
+  };
+  const choisir = async (fichier) => {
+    if (!fichier) return;
+    setEtat({ etape: 'sonde' });
+    let lue = 0;
+    try { lue = await sonderDuree(fichier); } catch { /* illisible : on le dit plus bas */ }
+    if (!(lue > 0)) {
+      setEtat({ etape: 'repos', erreur: 'Ce fichier ne se lit pas comme un enregistrement audio ou vidéo.' });
+      return;
+    }
+    const { verdict } = correspondance(duree, lue);
+    if (verdict === 'ok' || verdict === 'inconnu') envoyer(fichier);
+    else setEtat({ etape: 'doute', fichier, verdict, lue });
+  };
+
+  if (etat.etape === 'doute') {
+    return (
+      <div className="verre mt-2 rounded-xl p-4">
+        <p className="titre text-[0.9375rem] font-medium">Est-ce bien cette réunion ?</p>
+        <p className="mt-1 text-ekn-sm text-ekn-text/70">
+          « {etat.fichier.name} » dure {dureeLisible(etat.lue)}, la réunion transcrite {dureeLisible(duree)}.
+          {etat.verdict === 'plus-long'
+            ? ' C’est normal si la transcription avait été rognée.'
+            : ' Il manque peut-être une partie, ou c’est un autre fichier.'}
+        </p>
+        <div className="mt-3 flex gap-2">
+          <Bouton onClick={() => envoyer(etat.fichier)}>Joindre quand même</Bouton>
+          <button type="button" onClick={() => setEtat({ etape: 'repos' })} className="ekn-button ekn-button--subtle">
+            Annuler
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-3">
+      <input
+        ref={entree} type="file" hidden accept="audio/*,video/*"
+        onChange={(e) => { choisir(e.target.files?.[0]); e.target.value = ''; }}
+      />
+      <button
+        type="button" disabled={etat.etape === 'sonde'}
+        onClick={() => entree.current?.click()}
+        title={`${audio ? 'Pas d’enregistrement archivé' : 'Pas de vidéo archivée'} : joins le fichier d’origine pour pouvoir réécouter.`}
+        className="ekn-button ekn-button--subtle ekn-button--compact"
+      >
+        {etat.etape === 'sonde' ? 'Vérification du fichier…' : 'Joindre l’enregistrement'}
+      </button>
+      {etat.erreur ? <p className="ekn-error w-full">{etat.erreur}</p> : null}
     </div>
   );
 }

@@ -227,6 +227,16 @@ par ailleurs trait pour trait à celle de l'app macOS — c'est la
 vérification du jalon. L'Opus reste l'optimisation visée (~10,7 Mo/h
 contre ~28) : le jour où il est validé, seule `AUDIO_PROFILE` change.
 
+### Joindre l'enregistrement après coup
+
+Une réunion transcrite sans enregistrement archivé propose « Joindre
+l'enregistrement » sur sa fiche. Le fichier choisi suit l'archivage
+habituel (compression sur le poste, envoi par morceaux), via la même file
+d'une compression à la fois. Sa durée est d'abord comparée à celle de la
+réunion : à quelques secondes près, l'envoi part ; au-delà, on demande
+confirmation, sans interdire (une transcription rognée est plus courte que
+son fichier). Un envoi interrompu ne bloque pas le suivant.
+
 ### Rodage sans intervention
 
 `?source=/chemin` charge un fichier servi par le serveur au lieu de

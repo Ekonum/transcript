@@ -54,12 +54,24 @@ La liste technique est repliée ; le choix « Transcrire » seul disparaît pour
 un audio, les explications générales et celles du dialogue sont raccourcies.
 Les éditeurs sans transcription sont masqués. Aucun nouveau réglage permanent.
 
+## Prêt à livrer — joindre l’enregistrement après coup (30/10)
+
+Une réunion transcrite sans enregistrement archivé (envoi raté, onglet fermé
+trop tôt, fichier resté sur le poste d’un collègue) propose « Joindre
+l’enregistrement » sur sa fiche. Le fichier passe par l’archivage habituel ;
+sa durée est comparée à celle de la réunion avant l’envoi, et un écart se
+confirme sans être interdit (la transcription a pu être rognée). Aucun
+changement serveur : un envoi interrompu ne bloque pas le suivant, ce qu’un
+test vérifie désormais. Après livraison, la réunion 352 du 21/10 (« Voix.m4a »)
+se répare depuis le poste qui a gardé le fichier.
+
 ## Prochains sujets
 
 | # | Sujet | État |
 |---|-------|------|
 | 1 | Accès Odoo relayé par le broker | en attente du portail |
 | 2 | Un modèle de transcription moins cher, ou européen | prochain sujet |
+| 2 bis | Garder en base les erreurs du navigateur | prêt |
 | 3 | Un serveur MCP | prêt (les jetons d'API existent) |
 | 4 | Supprimer l'original en local après envoi | prêt |
 | 5 | Stockage des vidéos : passer de Google Drive à GCS | quand Odoo en aura besoin |
@@ -79,6 +91,14 @@ délégation, le consentement et le format définitif du manifeste
 (`consumes.odoo`) sont en revue (PR #34 à #36 du portail). On s'y met dès
 qu'ils sont fusionnés : le manifeste de transcript doit suivre leur format
 final, pas un brouillon.
+
+## Garder en base les erreurs du navigateur
+
+**Pourquoi** : `/api/client-errors` ne fait qu’écrire dans le journal du
+conteneur, effacé à chaque redéploiement. Le 22/10, la cause de l’échec
+d’archivage de la réunion 352 était déjà perdue. Une table courte (réunion,
+étape, message, navigateur, date), purgée après quelques semaines, suffit ;
+pas d’écran dédié tant que personne n’en a besoin.
 
 ## Un modèle de transcription moins cher, ou européen
 

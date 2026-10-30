@@ -2296,6 +2296,23 @@ class VideoTestCase(_Fixture):
         self.assertFalse(fiche["video"]["en_cours"])
         self.assertEqual(self.drive.fichiers["drive-1"], b"0123456789")
 
+    def test_joindre_apres_un_envoi_interrompu(self):
+        """Un envoi abandonné (onglet fermé) ne bloque pas « Joindre
+        l'enregistrement » : le nouvel envoi repart de zéro et aboutit."""
+        job_id = self._reunion()
+        self.client.post(f"/api/jobs/{job_id}/video", json={"taille": 10})
+        self.client.put(f"/api/jobs/{job_id}/video?debut=0", content=b"0123")
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertFalse(fiche["video"]["presente"])
+        self.assertTrue(fiche["video"]["en_cours"])
+
+        fin = self._envoyer(job_id, b"abcdefgh")
+        self.assertTrue(fin["termine"])
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertTrue(fiche["video"]["presente"])
+        self.assertFalse(fiche["video"]["en_cours"])
+        self.assertIn(b"abcdefgh", self.drive.fichiers.values())
+
     def test_la_session_drive_ne_sort_jamais_du_serveur(self):
         """Elle vaut autorisation d'écrire : le navigateur ne la voit pas."""
         job_id = self._reunion()

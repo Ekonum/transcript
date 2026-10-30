@@ -202,3 +202,13 @@ export function alleger(job) {
   }));
   return file;
 }
+
+/** Joindre l'enregistrement d'une réunion qui n'en a pas : envoi raté,
+ *  onglet fermé trop tôt, ou fichier resté sur le poste d'un collègue.
+ *  Même chemin qu'à la transcription ; la tâche suit la réunion dès le
+ *  départ, pour que sa fiche affiche l'avancement. */
+export function joindre(jobId, fichier, audio) {
+  publier(jobId, { etape: 'attente', progression: 0, erreur: '', audio });
+  file = file.then(() => archiver({ fichier, cible: { cle: jobId, jobId }, audio }));
+  return file;
+}
