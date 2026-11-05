@@ -120,6 +120,14 @@ class Settings:
     dev_user_email: str
     dev_api_key: str
 
+    # Préparation 1888 : aucun changement de mode implicite à l'installation.
+    auth_mode: str = "access-jwt"
+    keycloak_issuer: str = ""
+    keycloak_audience: str = ""
+    keycloak_authorized_party: str = ""
+    keycloak_jwks_url: str = ""
+    keycloak_link_legacy: bool = False
+
     @classmethod
     def from_env(cls) -> "Settings":
         state = Path(os.environ.get("EKOVIDEO_WEB_STATE", "./state")).resolve()
@@ -134,6 +142,12 @@ class Settings:
         return cls(
             db_path=Path(os.environ.get("EKOVIDEO_WEB_DB", state / "ekovideo.db")),
             chunk_dir=Path(os.environ.get("EKOVIDEO_WEB_CHUNKS", state / "chunks")),
+            auth_mode=os.environ.get("EKOVIDEO_AUTH_MODE", "access-jwt").strip(),
+            keycloak_issuer=os.environ.get("EKOVIDEO_KEYCLOAK_ISSUER", "").strip(),
+            keycloak_audience=os.environ.get("EKOVIDEO_KEYCLOAK_AUDIENCE", "").strip(),
+            keycloak_authorized_party=os.environ.get("EKOVIDEO_KEYCLOAK_AUTHORIZED_PARTY", "").strip(),
+            keycloak_jwks_url=os.environ.get("EKOVIDEO_KEYCLOAK_JWKS_URL", "").strip(),
+            keycloak_link_legacy=_flag("EKOVIDEO_KEYCLOAK_LINK_LEGACY"),
             access_team_domain=team,
             access_aud=os.environ.get("EKOVIDEO_ACCESS_AUD", "").strip(),
             broker_url=_broker_url(),

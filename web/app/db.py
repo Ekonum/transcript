@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
+from .user_identity import IdentityConflict, VerifiedKeycloakIdentity
+
 PARIS = ZoneInfo("Europe/Paris")
 
 
@@ -48,6 +50,17 @@ CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     email      TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Ajout compatible avec les comptes et owner_id historiques.
+CREATE TABLE IF NOT EXISTS user_keycloak_identities (
+    user_id        INTEGER PRIMARY KEY REFERENCES users(id),
+    issuer         TEXT NOT NULL,
+    subject        TEXT NOT NULL,
+    legacy_email   TEXT UNIQUE,
+    storage_owner  TEXT NOT NULL UNIQUE,
+    linked_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (issuer, subject)
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -338,6 +351,78 @@ class Database:
                 return int(row["id"])
             cursor = conn.execute("INSERT INTO users (email) VALUES (?)", (normalized,))
             return int(cursor.lastrowid)
+
+    def user_id_for_access_email(self, email: str) -> int:
+        """Access reste transitoire ; il ne réadopte jamais un compte déjà lié."""
+        normalized = email.strip().lower()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reserved = conn.execute(
+                "SELECT 1 FROM user_keycloak_identities WHERE legacy_email = ?",
+                (normalized,),
+            ).fetchone()
+            matches = [row for row in conn.execute("SELECT id, email FROM users")
+                       if row["email"].strip().lower() == normalized]
+            if len(matches) > 1:
+                raise IdentityConflict("Rapprochement ambigu : aucun compte modifié.")
+            row = matches[0] if matches else None
+            bound = row and conn.execute(
+                "SELECT 1 FROM user_keycloak_identities WHERE user_id = ?", (row["id"],),
+            ).fetchone()
+            if reserved or bound:
+                raise IdentityConflict("Une connexion Keycloak est requise pour ce compte.")
+            if row:
+                return int(row["id"])
+            return int(conn.execute("INSERT INTO users (email) VALUES (?)", (normalized,)).lastrowid)
+
+    def user_id_for_keycloak(self, identity: VerifiedKeycloakIdentity, *, link_legacy: bool) -> int:
+        """Lien unique sous transaction : jamais de fusion ni réattribution d'un owner_id."""
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            linked = conn.execute(
+                "SELECT user_id FROM user_keycloak_identities WHERE issuer = ? AND subject = ?",
+                (identity.issuer, identity.subject),
+            ).fetchone()
+            matches = [row for row in conn.execute("SELECT id, email FROM users")
+                       if row["email"].strip().lower() == identity.email]
+            if linked:
+                user_id = int(linked["user_id"])
+                if any(row["id"] != user_id for row in matches):
+                    raise IdentityConflict("Changement d'adresse ambigu : aucun compte modifié.")
+                conn.execute("UPDATE users SET email = ? WHERE id = ?", (identity.email, user_id))
+                return user_id
+            if len(matches) > 1:
+                raise IdentityConflict("Rapprochement ambigu : aucun compte modifié.")
+            if matches:
+                row = matches[0]
+                user_id = int(row["id"])
+                if not link_legacy or conn.execute(
+                    "SELECT 1 FROM user_keycloak_identities WHERE user_id = ?", (user_id,),
+                ).fetchone() or conn.execute(
+                    "SELECT 1 FROM user_keycloak_identities WHERE legacy_email = ?",
+                    (identity.email,),
+                ).fetchone():
+                    raise IdentityConflict("Ce compte ne peut pas être rapproché automatiquement.")
+                legacy_email, storage_owner = identity.email, row["email"]
+            else:
+                user_id = int(conn.execute("INSERT INTO users (email) VALUES (?)", (identity.email,)).lastrowid)
+                legacy_email, storage_owner = None, f"transcript-user:{user_id}"
+            conn.execute(
+                "INSERT INTO user_keycloak_identities (user_id, issuer, subject, legacy_email, storage_owner) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, identity.issuer, identity.subject, legacy_email, storage_owner),
+            )
+            conn.execute("UPDATE users SET email = ? WHERE id = ?", (identity.email, user_id))
+            return user_id
+
+    def user_profile(self, owner_id: int) -> dict:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT u.email, COALESCE(k.storage_owner, u.email) AS storage_owner "
+                "FROM users u LEFT JOIN user_keycloak_identities k ON k.user_id = u.id "
+                "WHERE u.id = ?", (owner_id,),
+            ).fetchone()
+            return dict(row) if row else {"email": "", "storage_owner": ""}
 
     def email_for_user(self, owner_id: int) -> str:
         with self.connect() as conn:

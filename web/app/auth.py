@@ -1,4 +1,4 @@
-"""Authentification Cloudflare Access.
+"""Authentification Access et vérification Keycloak explicitement sélectionnée.
 
 Le piège classique : se contenter de l'en-tête
 ``Cf-Access-Authenticated-User-Email``. N'importe qui atteignant le
@@ -64,3 +64,80 @@ class AccessVerifier:
         if not email:
             raise AuthError("Le jeton Access ne porte pas d'adresse e-mail.")
         return email
+
+
+class KeycloakVerifier:
+    """Vérifie un access token Keycloak ; ne consomme jamais le sub d'Access.
+
+    Le transport navigateur et le client interactif sont à valider par le
+    portail avant activation. Aucun discovery ou accès administratif ici.
+    """
+
+    def __init__(self, issuer: str, audience: str, authorized_party: str,
+                 jwks_url: str = '', *, jwk_client=None):
+        from urllib.parse import urlsplit
+
+        self.issuer = issuer.strip()
+        self.audience = audience.strip()
+        self.authorized_party = authorized_party.strip()
+        self.jwks_url = jwks_url.strip() or self.issuer.rstrip('/') + '/protocol/openid-connect/certs'
+        for url in (self.issuer, self.jwks_url):
+            parsed = urlsplit(url)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment):
+                raise ValueError('Une URL HTTPS Keycloak explicite est requise.')
+        issuer_url, keys_url = urlsplit(self.issuer), urlsplit(self.jwks_url)
+        if ((issuer_url.hostname, issuer_url.port or 443) != (keys_url.hostname, keys_url.port or 443)
+            or not self.audience or not self.authorized_party):
+            raise ValueError('Configuration Keycloak incomplète ou JWKS hors origine.')
+        self._jwk_client = jwk_client
+        self._lock = threading.Lock()
+
+    def _client(self):
+        with self._lock:
+            if self._jwk_client is None:
+                self._jwk_client = _PinnedJWKClient(self.jwks_url, timeout=5)
+            return self._jwk_client
+
+    def identity_from_token(self, token: str):
+        from .user_identity import VerifiedKeycloakIdentity
+
+        if not token:
+            raise AuthError('Jeton Keycloak absent.')
+        try:
+            key = self._client().get_signing_key_from_jwt(token)
+            claims = jwt.decode(token, key.key, algorithms=['RS256'],
+                audience=self.audience, issuer=self.issuer,
+                options={'require': ['iss', 'sub', 'aud', 'exp', 'iat']})
+            if (claims.get('azp') != self.authorized_party or claims.get('typ') != 'Bearer'
+                or claims.get('email_verified') is not True):
+                raise ValueError('Claims non admissibles.')
+            return VerifiedKeycloakIdentity(self.issuer, claims.get('sub'), claims.get('email'))
+        except Exception as exc:
+            # Ni jeton brut ni valeurs de claims dans l'erreur ou les journaux.
+            raise AuthError('Jeton Keycloak invalide.') from exc
+
+
+class _PinnedJWKClient(PyJWKClient):
+    """Le JWKS configuré uniquement, sans suivre une redirection."""
+
+    def fetch_data(self):
+        import json
+        from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        data = None
+        try:
+            request = Request(self.uri, headers={'Accept': 'application/json'})
+            with build_opener(NoRedirect()).open(request, timeout=self.timeout) as response:
+                body = response.read(262145)
+                if len(body) > 262144:
+                    raise ValueError('JWKS trop volumineux.')
+                data = json.loads(body)
+            return data
+        finally:
+            if self.jwk_set_cache is not None:
+                self.jwk_set_cache.put(data)
