@@ -192,6 +192,21 @@ class OdooGateway:
             for l in (lignes or [])
         ]
 
+    def record_name(self, model: str, record_id: int) -> str:
+        """The record's display_name, as Odoo shows it to this person."""
+        from odoo_client import _json2_call
+
+        try:
+            rows = _json2_call(
+                self._config(), model, "read",
+                {"ids": [int(record_id)], "fields": ["display_name"]},
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not rows:
+            raise OdooUnavailable(f"Dossier {model} {record_id} introuvable.")
+        return str(rows[0].get("display_name") or "")
+
     def resume_dossier(self, modele: str, record_id: int) -> dict[str, Any]:
         """De quoi vérifier qu'un dossier est bien celui dont on parle.
 

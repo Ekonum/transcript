@@ -259,6 +259,9 @@ class Database:
             ("odoo_record_id", "INTEGER"),
             ("odoo_message_id", "INTEGER"),
             ("odoo_published_at", "TEXT"),
+            # The record's display_name, so the page shows what the record
+            # is rather than its id. Cached: Odoo is not asked on every view.
+            ("odoo_record_name", "TEXT"),
             # Corbeille et archives : une réunion ne disparaît pas d'un
             # clic, et une réunion close n'encombre pas la bibliothèque.
             # Ce dont le modèle n'était pas sûr : l'app macOS l'écrivait
@@ -1269,14 +1272,26 @@ class Database:
         return rows
 
     def set_odoo_link(
-        self, job_id: int, *, model: str, record_id: int, message_id: int | None
+        self, job_id: int, *, model: str, record_id: int, message_id: int | None,
+        name: str | None = None,
     ) -> None:
+        """Link a meeting to an Odoo record.
+
+        The cached record name survives a call that doesn't know it, as
+        long as the record stays the same; pointing at another record
+        drops it, so a stale name is never shown next to a new record.
+        """
         with self.connect() as conn:
             conn.execute(
-                "UPDATE jobs SET odoo_model = ?, odoo_record_id = ?, "
+                "UPDATE jobs SET odoo_record_name = CASE "
+                "WHEN ? IS NOT NULL THEN ? "
+                "WHEN odoo_model = ? AND odoo_record_id = ? THEN odoo_record_name "
+                "ELSE NULL END, "
+                "odoo_model = ?, odoo_record_id = ?, "
                 "odoo_message_id = ?, odoo_published_at = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
+                    name or None, name or None, model, record_id,
                     model,
                     record_id,
                     message_id,
@@ -1284,6 +1299,17 @@ class Database:
                     datetime.now().isoformat(timespec="seconds"),
                     job_id,
                 ),
+            )
+
+    def set_odoo_record_name(
+        self, job_id: int, *, model: str, record_id: int, name: str
+    ) -> None:
+        """Cache a record name fetched later, unless the link moved meanwhile."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET odoo_record_name = ? "
+                "WHERE id = ? AND odoo_model = ? AND odoo_record_id = ?",
+                (name, job_id, model, record_id),
             )
 
     # -- jetons d'API ---------------------------------------------------
