@@ -691,7 +691,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   // plus rien à demander.
                   ...(dossier
                     ? {
-                        odoo_record: { model: dossier.model, record_id: dossier.id },
+                        odoo_record: { model: dossier.model, record_id: dossier.id, name: dossier.name },
                         odoo_auto: dossier.auto,
                       }
                     : {}),

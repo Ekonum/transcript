@@ -601,6 +601,38 @@ function Joindre({ jobId, duree, audio }) {
   );
 }
 
+/** The linked Odoo record as people know it: its kind, its name, and a
+ *  link that opens it. Meetings linked before names were stored ask the
+ *  server once; until then (or if Odoo can't answer) the model and id
+ *  remain, so the record is never anonymous. */
+function DossierOdoo({ lien, accent = false }) {
+  const [charge, setCharge] = useState(null);
+  const jobId = lien.job_id;
+  useEffect(() => {
+    setCharge(null);
+    if (!lien.record_id || lien.name || !jobId) return;
+    let vivant = true;
+    api.odooRecord(jobId).then((r) => { if (vivant) setCharge(r); }).catch(() => {});
+    return () => { vivant = false; };
+  }, [jobId, lien.model, lien.record_id, lien.name]);
+  const info = { ...lien, ...(charge || {}) };
+  const type = info.kind ? info.kind[0].toUpperCase() + info.kind.slice(1) : info.model;
+  const nom = info.name || `#${info.record_id}`;
+  const libelle = <span className={accent ? 'titre font-medium' : ''}>{nom}</span>;
+  return (
+    <>
+      <span className="text-ekn-text-muted">{type} · </span>
+      {info.url ? (
+        <a href={info.url} target="_blank" rel="noopener noreferrer"
+          className="underline decoration-turquoise/60 underline-offset-2 hover:decoration-turquoise"
+          title="Ouvrir dans Odoo">
+          {libelle}
+        </a>
+      ) : libelle}
+    </>
+  );
+}
+
 /** Copie la transcription telle qu'on la colle ailleurs — un courriel,
  *  un chatter, un document : « Interlocuteur : texte », ligne par ligne.
  *
@@ -992,7 +1024,7 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
   // Relire puis déposer prend une vingtaine de secondes : sans étape
   // affichée, l'écran paraissait figé alors que tout se passait bien.
   const [etape, setEtape] = useState('');
-  const lien = fiche.odoo || {};
+  const lien = { ...(fiche.odoo || {}), job_id: jobId };
 
   useEffect(() => {
     const terme = requete.trim();
@@ -1011,7 +1043,7 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
           Déposée dans le chatter le {jour(lien.published_at)}.
         </p>
         <p className="mt-0.5 text-ekn-sm text-ekn-text-muted">
-          {lien.model} #{lien.record_id}
+          <DossierOdoo lien={lien} />
         </p>
       </div>
     );
@@ -1024,9 +1056,9 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
       <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
       {lien.record_id ? (
         <div className="mt-2 rounded-lg bg-papier p-3">
-          <p className="text-ekn-sm">
-            Dossier retenu avant la transcription :{' '}
-            <span className="titre font-medium">{lien.model} #{lien.record_id}</span>
+          <p className="text-ekn-sm">Dossier retenu avant la transcription :</p>
+          <p className="mt-0.5 text-ekn-sm">
+            <DossierOdoo lien={lien} accent />
           </p>
           <Bouton
             className="mt-2"
@@ -1035,7 +1067,7 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
               setEnvoi(true);
               try {
                 await api.odooPublish(jobId, {
-                  model: lien.model, record_id: lien.record_id,
+                  model: lien.model, record_id: lien.record_id, name: lien.name || '',
                 });
                 surNote('Déposée dans le dossier retenu.');
                 surMaj();
@@ -1090,7 +1122,7 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
                       .reenrichir(jobId, { model: c.model, record_id: c.id })
                       .catch(() => null);
                     setEtape('Dépôt dans le chatter…');
-                    await api.odooPublish(jobId, { model: c.model, record_id: c.id });
+                    await api.odooPublish(jobId, { model: c.model, record_id: c.id, name: c.name });
                     surNote(relu
                       ? `Relue puis déposée dans « ${c.name} ».`
                       : `Déposée dans « ${c.name} ».`);
