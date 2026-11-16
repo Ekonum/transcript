@@ -136,3 +136,43 @@ La recherche ciblée au **commit `main` de départ** dans `.github/`, `web/docke
 README et `web/docs/` ne trouve aucune référence active à cet ancien registre :
 la seule occurrence est ce commentaire historique du workflow. Cela ne prouve pas
 l'absence de configurations externes ou d'anciens artefacts hors dépôt.
+
+## Connexion dans le navigateur (16/11)
+
+Le transport qui manquait est maintenant écrit : **Transcript connecte lui-même ses
+utilisateurs**, côté serveur, comme le prévoit le portail pour une application qui déclare
+`auth.login` (`web/app/oidc.py`).
+
+1. Sans session, l'API répond `401` avec l'en-tête `X-Ekonum-Login: /oidc/login` ; le client
+   y part en gardant la page en cours (la file de travail est déjà sauvegardée dans le navigateur).
+2. `/oidc/login` ouvre le flux standard sur le client confidentiel `transcript` : `state`,
+   `nonce` et PKCE `S256`, gardés dix minutes et à usage unique.
+3. `/oidc/callback` échange le code avec le secret du client (`EKONUM_CLIENT_SECRET`, le même
+   que pour le broker), vérifie le jeton d'identité (signature du royaume, `iss`, `aud`, `azp`,
+   `nonce`, e-mail vérifié), puis résout le compte par `(issuer, sub)` avec le rapprochement
+   unique décrit plus haut.
+4. Le navigateur reçoit un cookie de session `HttpOnly`, `Secure`, `SameSite=Lax`, valable
+   12 heures ; seule son empreinte est gardée. Une nouvelle connexion est en général silencieuse
+   tant que la session Keycloak est ouverte. « Se déconnecter » ferme la session de Transcript
+   puis celle de Keycloak.
+
+Le navigateur ne détient jamais de jeton Keycloak. Les jetons `ekt_` et les jetons d'accès
+Keycloak en `Authorization: Bearer` (CLI, scope `app-transcript`) restent acceptés.
+
+### Activer, dans l'ordre
+
+1. Fusionner ce lot : le manifeste passe en `portal-oidc` avec `auth.login`, ce qui **enrôle**
+   Transcript. Le portail crée le client `transcript` et son flux ; rien ne change en production.
+2. Approuver dans le portail l'accès au broker et les deux fiches déclarées.
+3. Remettre le secret du client :
+   `deploy/identite-configurer.py --apply --deliver-app-secret transcript --stack <stack>`.
+   À partir de là, Transcript lit aussi le coffre par le portail (PR #182).
+4. Sauvegarder la base (`/data/ekovideo.db`).
+5. Poser sur le stack `EKOVIDEO_AUTH_MODE=keycloak-jwt`, `EKOVIDEO_KEYCLOAK_ISSUER`,
+   `EKOVIDEO_KEYCLOAK_AUDIENCE=transcript`, `EKOVIDEO_KEYCLOAK_AUTHORIZED_PARTY=ekonum-secret`
+   (jetons du CLI) et `EKOVIDEO_KEYCLOAK_LINK_LEGACY=1` pour le premier passage de chacun.
+6. Se connecter, vérifier ses réunions, puis faire de même pour chaque personne. Une fois tous
+   les comptes liés, retirer `EKOVIDEO_KEYCLOAK_LINK_LEGACY`.
+
+Le retour arrière après une première liaison suit la section « Retour et conservation des
+écritures » : ne pas restaurer une ancienne image qui authentifie par e-mail.

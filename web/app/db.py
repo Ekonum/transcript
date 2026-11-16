@@ -210,6 +210,24 @@ CREATE TABLE IF NOT EXISTS oauth_states (
     created_at TEXT NOT NULL
 );
 
+-- Portal sign-in in progress: binds Keycloak's answer to this browser's
+-- request (state), the ID token to it (nonce), the code to it (PKCE).
+CREATE TABLE IF NOT EXISTS oidc_logins (
+    state      TEXT PRIMARY KEY,
+    nonce      TEXT NOT NULL,
+    verifier   TEXT NOT NULL,
+    next_path  TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Browser sessions opened by a portal sign-in. Only the cookie's hash is kept.
+CREATE TABLE IF NOT EXISTS web_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 -- D'où vient chaque enregistrement récupéré. Commune à toute l'équipe :
 -- un fichier du Drive partagé récupéré par l'un ne se récupère pas une
 -- seconde fois par l'autre.
@@ -1255,6 +1273,59 @@ class Database:
             ).fetchone()
             conn.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
         return row["verifier"] if row else None
+
+    def save_oidc_login(self, state: str, nonce: str, verifier: str, next_path: str) -> None:
+        now = datetime.now()
+        with self.connect() as conn:
+            conn.execute("DELETE FROM oidc_logins WHERE created_at < ?",
+                         ((now - timedelta(minutes=10)).isoformat(timespec="seconds"),))
+            conn.execute(
+                "INSERT INTO oidc_logins (state, nonce, verifier, next_path, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (state, nonce, verifier, next_path, now.isoformat(timespec="seconds")),
+            )
+
+    def pop_oidc_login(self, state: str) -> dict | None:
+        """A sign-in request, consumed: one use, within ten minutes."""
+        limit = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT nonce, verifier, next_path FROM oidc_logins "
+                "WHERE state = ? AND created_at >= ?", (state, limit),
+            ).fetchone()
+            conn.execute("DELETE FROM oidc_logins WHERE state = ?", (state,))
+        return dict(row) if row else None
+
+    def open_web_session(self, user_id: int, hours: float) -> str:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        with self.connect() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE expires_at < ?",
+                         (now.isoformat(timespec="seconds"),))
+            conn.execute(
+                "INSERT INTO web_sessions (token_hash, user_id, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?)",
+                (hashlib.sha256(token.encode()).hexdigest(), user_id,
+                 now.isoformat(timespec="seconds"),
+                 (now + timedelta(hours=hours)).isoformat(timespec="seconds")),
+            )
+        return token
+
+    def user_for_web_session(self, token: str) -> int | None:
+        if not token:
+            return None
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_at >= ?",
+                (hashlib.sha256(token.encode()).hexdigest(), now),
+            ).fetchone()
+        return int(row["user_id"]) if row else None
+
+    def close_web_session(self, token: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE token_hash = ?",
+                         (hashlib.sha256(token.encode()).hexdigest(),))
 
     def dismiss_recovery(self, user_id: int) -> None:
         with self.connect() as conn:

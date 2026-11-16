@@ -77,7 +77,8 @@ Fait : le manifeste déclare les deux fiches lues hors de `Applications/transcri
 
 Pour basculer :
 1. **Enrôler Transcript** (`auth.mode: portal-oidc`) : le portail l'exige pour l'accès au broker.
-   C'est la suite de la préparation Keycloak en revue (PR #179), à mener avec le portail.
+   La PR #179 le déclare, avec la connexion par le portail dans le navigateur ; ordre
+   d'activation dans [KEYCLOAK-IDENTITY.md](KEYCLOAK-IDENTITY.md).
 2. **Approuver** l'accès au broker et les deux fiches, page Applications du portail.
 3. **Remettre le secret** : `deploy/identite-configurer.py --apply --deliver-app-secret transcript --stack <stack>`.
 4. Vérifier une transcription et une connexion Google, puis **retirer `EKONUM_TOKEN`** du stack

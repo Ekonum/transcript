@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import html
 import logging
 import os
@@ -26,7 +27,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Response
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -47,6 +48,7 @@ from cloud_transcription import (
 from .audio_parts import audio_parts
 from . import avancement
 from .auth import AccessVerifier, AuthError, KeycloakVerifier
+from .oidc import OidcLogin, pkce_pair, safe_next
 from .user_identity import IdentityConflict
 from .chatter import ChatterError, composer
 from .coffre import Coffre, CoffreIndisponible
@@ -290,6 +292,12 @@ def _designe(passage: str, mot: str) -> bool:
     return bool(mot.strip()) and _pli(passage).strip(" .,;:!?«»\"'") == _pli(mot)
 
 
+# Portal sign-in: an HttpOnly cookie, for a working day. Signing in again is
+# usually silent, as long as the Keycloak session is still open.
+SESSION_COOKIE = "transcript_session"
+SESSION_HOURS = 12.0
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -297,6 +305,7 @@ def create_app(
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
     keycloak_verifier: KeycloakVerifier | None = None,
+    oidc_login: OidcLogin | None = None,
     odoo_factory=None,
     stockage_factory=None,
     google_opener=None,
@@ -333,6 +342,17 @@ def create_app(
         keycloak = keycloak_verifier or KeycloakVerifier(
             config.keycloak_issuer, config.keycloak_audience,
             config.keycloak_authorized_party, config.keycloak_jwks_url)
+    # Browser sign-in through the portal: same client as the broker access,
+    # whose secret the administrator delivers into EKONUM_CLIENT_SECRET.
+    oidc = None
+    if keycloak is not None:
+        oidc = oidc_login or OidcLogin(
+            issuer=config.keycloak_issuer,
+            client_id=config.broker_client_id,
+            client_secret=lambda: config.broker_client_secret,
+            redirect_uri=config.public_url.rstrip("/") + "/oidc/callback",
+            jwk_client=keycloak._client(),
+        )
     euro = EuroRate(db, opener=fx_opener)
 
     etat_stockage: dict[str, Any] = {}
@@ -447,6 +467,14 @@ def create_app(
         if config.dev_mode:
             request.state.identity_source = "access-jwt"
             return db.user_id_for_email(config.dev_user_email)
+        if keycloak is not None and not is_bearer:
+            owner = db.user_for_web_session(request.cookies.get(SESSION_COOKIE, ""))
+            if owner is None:
+                # The client follows this header to the portal sign-in.
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Connexion requise.",
+                                    headers={"X-Ekonum-Login": "/oidc/login"})
+            request.state.identity_source = "keycloak-session"
+            return owner
         try:
             if keycloak is not None:
                 identity = keycloak.identity_from_token(bearer)
@@ -1433,6 +1461,51 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Demande inconnue.")
         return vue
 
+    # -- portal sign-in (keycloak-jwt mode only) -------------------------
+
+    if oidc is not None:
+        @app.get("/oidc/login", include_in_schema=False)
+        def oidc_login_start(next: str = "/") -> RedirectResponse:
+            if not oidc.configured:
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    "Connexion par le portail pas encore configurée.")
+            state, nonce = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+            verifier, challenge = pkce_pair()
+            db.save_oidc_login(state, nonce, verifier, safe_next(next))
+            return RedirectResponse(
+                oidc.authorization_url(state=state, nonce=nonce, challenge=challenge),
+                status_code=status.HTTP_302_FOUND)
+
+        @app.get("/oidc/callback", include_in_schema=False)
+        def oidc_callback(state: str = "", code: str = "", error: str = "") -> Response:
+            pending = db.pop_oidc_login(state) if state else None
+            if error or not code or pending is None:
+                # Expired, replayed or refused: start again rather than explain.
+                return RedirectResponse("/oidc/login", status_code=status.HTTP_302_FOUND)
+            try:
+                tokens = oidc.exchange(code, pending["verifier"])
+                identity = oidc.identity(str(tokens.get("id_token") or ""), pending["nonce"])
+                owner = db.user_id_for_keycloak(identity, link_legacy=config.keycloak_link_legacy)
+            except AuthError as exc:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+            except IdentityConflict as exc:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+            response = RedirectResponse(pending["next_path"], status_code=status.HTTP_302_FOUND)
+            response.set_cookie(
+                SESSION_COOKIE, db.open_web_session(owner, SESSION_HOURS),
+                max_age=int(SESSION_HOURS * 3600), httponly=True, secure=True,
+                samesite="lax", path="/")
+            return response
+
+        @app.post("/oidc/logout", include_in_schema=False)
+        def oidc_logout(request: Request) -> JSONResponse:
+            token = request.cookies.get(SESSION_COOKIE, "")
+            if token:
+                db.close_web_session(token)
+            response = JSONResponse({"logout_url": oidc.logout_url(config.public_url)})
+            response.delete_cookie(SESSION_COOKIE, path="/")
+            return response
+
     @app.get("/api/me")
     def me(request: Request, owner_id: int = Depends(current_user)) -> dict:
         """Qui suis-je, et comment suis-je entré.
@@ -1443,7 +1516,8 @@ def create_app(
         """
         return {
             **db.user_profile(owner_id),
-            "via": {"api-token": "jeton d'API", "keycloak-jwt": "Keycloak"}
+            "via": {"api-token": "jeton d'API", "keycloak-jwt": "Keycloak",
+                    "keycloak-session": "portail"}
                 .get(request.state.identity_source, "Cloudflare Access"),
         }
 
