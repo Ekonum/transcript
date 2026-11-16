@@ -77,7 +77,8 @@ Fait : le manifeste déclare les deux fiches lues hors de `Applications/transcri
 
 Pour basculer :
 1. **Enrôler Transcript** (`auth.mode: portal-oidc`) : le portail l'exige pour l'accès au broker.
-   C'est la suite de la préparation Keycloak en revue (PR #179), à mener avec le portail.
+   La PR #179 le déclare, avec la connexion par le portail dans le navigateur ; ordre
+   d'activation dans [KEYCLOAK-IDENTITY.md](KEYCLOAK-IDENTITY.md).
 2. **Approuver** l'accès au broker et les deux fiches, page Applications du portail.
 3. **Remettre le secret** : `deploy/identite-configurer.py --apply --deliver-app-secret transcript --stack <stack>`.
 4. Vérifier une transcription et une connexion Google, puis **retirer `EKONUM_TOKEN`** du stack
@@ -87,6 +88,16 @@ Le secret du client Google est propre à Transcript : à terme, il gagne `Applic
 (`bin/ekonum-app-key`), et sa déclaration quitte le manifeste.
 
 ## Prochains sujets
+
+### Préparation en revue — identité Keycloak (29/10, portail 1888)
+
+Le rapprochement initial sur e-mail vérifié conserve le numéro local du compte,
+puis le couple issuer/sub Keycloak le désigne durablement. Les collisions sont
+refusées ; changement d'adresse, conservation des données et retour sur copie
+synthétique sont éprouvés. La file sauvegardée garde son espace, sans nouvel écran.
+Le mode reste désactivé par défaut ; transport navigateur, politique du client
+interactif et activation restent à valider avec le portail. Aucune identité
+ou donnée réelle modifiée. Voir [le périmètre et les preuves](KEYCLOAK-IDENTITY.md).
 
 | # | Sujet | État |
 |---|-------|------|

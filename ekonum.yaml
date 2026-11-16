@@ -21,8 +21,15 @@ data_classification: client       # transcriptions de réunions clients, et clé
 lifecycle: active                 # en service sur transcript.ekonum.fr depuis le 16/09/2026
 
 auth:
-  mode: access-jwt                # JWT Access vérifié contre le JWKS (web/app/access.py) ; jetons ekt_ pour les appels machine
-  identity_key: email             # comptes créés depuis l'e-mail du JWT Access (dette de migration, §8)
+  # Portal sign-in (web/app/oidc.py): code flow + PKCE on the `transcript` client, then an
+  # HttpOnly session; accounts keyed by Keycloak (issuer, sub), a historical account linked
+  # once by its verified e-mail. Declaring it here enrols the app, which the portal requires
+  # before it can deliver the client secret. Until EKOVIDEO_AUTH_MODE=keycloak-jwt is set on
+  # the stack, production keeps verifying the Cloudflare Access JWT. ekt_ tokens unchanged.
+  mode: portal-oidc
+  identity_key: sub
+  login:
+    redirect_uris: [https://transcript.ekonum.fr/oidc/callback]
 
 consumes:
   odoo:                           # clé API personnelle de chacun (web/app/odoo.py, chatter.py)

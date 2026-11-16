@@ -66,6 +66,20 @@ export function Entete({ vue, surVue, surAide }) {
  *  page de connexion Google — c'est le « se connecter ». */
 export const DECONNEXION = '/cdn-cgi/access/logout';
 
+/** Sign out of whichever sign-in opened this session: the portal one when
+ *  it exists (Transcript's session, then Keycloak's), Cloudflare Access's
+ *  otherwise. */
+export async function seDeconnecter() {
+  try {
+    const response = await fetch('/oidc/logout', { method: 'POST' });
+    if (response.ok) {
+      const { logout_url: url } = await response.json();
+      if (url) { window.location.assign(url); return; }
+    }
+  } catch { /* Access mode: no portal session to close */ }
+  window.location.assign(DECONNEXION);
+}
+
 /** Le compte, et ce qui ne sert pas tous les jours : réglages,
  *  raccourcis, déconnexion — rangés derrière l'avatar plutôt qu'affichés
  *  en permanence. */
@@ -159,7 +173,7 @@ function Compte({ moi, surVue, surAide, actif }) {
           Raccourcis clavier <kbd className="ekn-key">?</kbd>
         </button>
         <hr />
-        <a href={DECONNEXION}>Se déconnecter</a>
+        <button type="button" onClick={seDeconnecter}>Se déconnecter</button>
       </div>
     </div>
   );

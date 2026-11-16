@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
+from .user_identity import IdentityConflict, VerifiedKeycloakIdentity
+
 PARIS = ZoneInfo("Europe/Paris")
 
 
@@ -48,6 +50,17 @@ CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     email      TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Ajout compatible avec les comptes et owner_id historiques.
+CREATE TABLE IF NOT EXISTS user_keycloak_identities (
+    user_id        INTEGER PRIMARY KEY REFERENCES users(id),
+    issuer         TEXT NOT NULL,
+    subject        TEXT NOT NULL,
+    legacy_email   TEXT UNIQUE,
+    storage_owner  TEXT NOT NULL UNIQUE,
+    linked_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (issuer, subject)
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -197,6 +210,24 @@ CREATE TABLE IF NOT EXISTS oauth_states (
     created_at TEXT NOT NULL
 );
 
+-- Portal sign-in in progress: binds Keycloak's answer to this browser's
+-- request (state), the ID token to it (nonce), the code to it (PKCE).
+CREATE TABLE IF NOT EXISTS oidc_logins (
+    state      TEXT PRIMARY KEY,
+    nonce      TEXT NOT NULL,
+    verifier   TEXT NOT NULL,
+    next_path  TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Browser sessions opened by a portal sign-in. Only the cookie's hash is kept.
+CREATE TABLE IF NOT EXISTS web_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 -- D'où vient chaque enregistrement récupéré. Commune à toute l'équipe :
 -- un fichier du Drive partagé récupéré par l'un ne se récupère pas une
 -- seconde fois par l'autre.
@@ -341,6 +372,78 @@ class Database:
                 return int(row["id"])
             cursor = conn.execute("INSERT INTO users (email) VALUES (?)", (normalized,))
             return int(cursor.lastrowid)
+
+    def user_id_for_access_email(self, email: str) -> int:
+        """Access reste transitoire ; il ne réadopte jamais un compte déjà lié."""
+        normalized = email.strip().lower()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reserved = conn.execute(
+                "SELECT 1 FROM user_keycloak_identities WHERE legacy_email = ?",
+                (normalized,),
+            ).fetchone()
+            matches = [row for row in conn.execute("SELECT id, email FROM users")
+                       if row["email"].strip().lower() == normalized]
+            if len(matches) > 1:
+                raise IdentityConflict("Rapprochement ambigu : aucun compte modifié.")
+            row = matches[0] if matches else None
+            bound = row and conn.execute(
+                "SELECT 1 FROM user_keycloak_identities WHERE user_id = ?", (row["id"],),
+            ).fetchone()
+            if reserved or bound:
+                raise IdentityConflict("Une connexion Keycloak est requise pour ce compte.")
+            if row:
+                return int(row["id"])
+            return int(conn.execute("INSERT INTO users (email) VALUES (?)", (normalized,)).lastrowid)
+
+    def user_id_for_keycloak(self, identity: VerifiedKeycloakIdentity, *, link_legacy: bool) -> int:
+        """Lien unique sous transaction : jamais de fusion ni réattribution d'un owner_id."""
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            linked = conn.execute(
+                "SELECT user_id FROM user_keycloak_identities WHERE issuer = ? AND subject = ?",
+                (identity.issuer, identity.subject),
+            ).fetchone()
+            matches = [row for row in conn.execute("SELECT id, email FROM users")
+                       if row["email"].strip().lower() == identity.email]
+            if linked:
+                user_id = int(linked["user_id"])
+                if any(row["id"] != user_id for row in matches):
+                    raise IdentityConflict("Changement d'adresse ambigu : aucun compte modifié.")
+                conn.execute("UPDATE users SET email = ? WHERE id = ?", (identity.email, user_id))
+                return user_id
+            if len(matches) > 1:
+                raise IdentityConflict("Rapprochement ambigu : aucun compte modifié.")
+            if matches:
+                row = matches[0]
+                user_id = int(row["id"])
+                if not link_legacy or conn.execute(
+                    "SELECT 1 FROM user_keycloak_identities WHERE user_id = ?", (user_id,),
+                ).fetchone() or conn.execute(
+                    "SELECT 1 FROM user_keycloak_identities WHERE legacy_email = ?",
+                    (identity.email,),
+                ).fetchone():
+                    raise IdentityConflict("Ce compte ne peut pas être rapproché automatiquement.")
+                legacy_email, storage_owner = identity.email, row["email"]
+            else:
+                user_id = int(conn.execute("INSERT INTO users (email) VALUES (?)", (identity.email,)).lastrowid)
+                legacy_email, storage_owner = None, f"transcript-user:{user_id}"
+            conn.execute(
+                "INSERT INTO user_keycloak_identities (user_id, issuer, subject, legacy_email, storage_owner) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, identity.issuer, identity.subject, legacy_email, storage_owner),
+            )
+            conn.execute("UPDATE users SET email = ? WHERE id = ?", (identity.email, user_id))
+            return user_id
+
+    def user_profile(self, owner_id: int) -> dict:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT u.email, COALESCE(k.storage_owner, u.email) AS storage_owner "
+                "FROM users u LEFT JOIN user_keycloak_identities k ON k.user_id = u.id "
+                "WHERE u.id = ?", (owner_id,),
+            ).fetchone()
+            return dict(row) if row else {"email": "", "storage_owner": ""}
 
     def email_for_user(self, owner_id: int) -> str:
         with self.connect() as conn:
@@ -1170,6 +1273,59 @@ class Database:
             ).fetchone()
             conn.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
         return row["verifier"] if row else None
+
+    def save_oidc_login(self, state: str, nonce: str, verifier: str, next_path: str) -> None:
+        now = datetime.now()
+        with self.connect() as conn:
+            conn.execute("DELETE FROM oidc_logins WHERE created_at < ?",
+                         ((now - timedelta(minutes=10)).isoformat(timespec="seconds"),))
+            conn.execute(
+                "INSERT INTO oidc_logins (state, nonce, verifier, next_path, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (state, nonce, verifier, next_path, now.isoformat(timespec="seconds")),
+            )
+
+    def pop_oidc_login(self, state: str) -> dict | None:
+        """A sign-in request, consumed: one use, within ten minutes."""
+        limit = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT nonce, verifier, next_path FROM oidc_logins "
+                "WHERE state = ? AND created_at >= ?", (state, limit),
+            ).fetchone()
+            conn.execute("DELETE FROM oidc_logins WHERE state = ?", (state,))
+        return dict(row) if row else None
+
+    def open_web_session(self, user_id: int, hours: float) -> str:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        with self.connect() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE expires_at < ?",
+                         (now.isoformat(timespec="seconds"),))
+            conn.execute(
+                "INSERT INTO web_sessions (token_hash, user_id, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?)",
+                (hashlib.sha256(token.encode()).hexdigest(), user_id,
+                 now.isoformat(timespec="seconds"),
+                 (now + timedelta(hours=hours)).isoformat(timespec="seconds")),
+            )
+        return token
+
+    def user_for_web_session(self, token: str) -> int | None:
+        if not token:
+            return None
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM web_sessions WHERE token_hash = ? AND expires_at >= ?",
+                (hashlib.sha256(token.encode()).hexdigest(), now),
+            ).fetchone()
+        return int(row["user_id"]) if row else None
+
+    def close_web_session(self, token: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE token_hash = ?",
+                         (hashlib.sha256(token.encode()).hexdigest(),))
 
     def dismiss_recovery(self, user_id: int) -> None:
         with self.connect() as conn:

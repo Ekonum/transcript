@@ -15,7 +15,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let active = true;
-    api.me().then((me) => openFileQueue(me.email)).catch(() => {})
+    api.me().then((me) => openFileQueue(me.storage_owner || me.email)).catch(() => {})
       .finally(() => { if (active) setReady(true); });
     return () => { active = false; };
   }, []);

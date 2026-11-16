@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { DECONNEXION } from './Marque.jsx';
+import { seDeconnecter } from './Marque.jsx';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
 import { Dashboard } from './Dashboard.jsx';
 
@@ -32,12 +32,13 @@ export function Compte() {
           {moi?.email}
           {moi ? <span className="text-ekn-text-muted"> · connecté via {moi.via}</span> : null}
         </p>
-        <a
-          href={DECONNEXION}
+        <button
+          type="button"
+          onClick={seDeconnecter}
           className="ekn-button ekn-button--subtle ekn-button--compact"
         >
           Se déconnecter
-        </a>
+        </button>
       </div>
 
       <Erreur>{erreur}</Erreur>
