@@ -53,7 +53,7 @@ from . import dashboard
 from .db import Database
 from .fx import EuroRate
 from .odoo import OdooGateway, OdooUnavailable
-from .secrets import GeminiKey, SecretError
+from .secrets import BrokerAuth, GeminiKey, SecretError
 from .identite import IdentiteGoogle
 from .recovery import register_recovery_routes
 from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
@@ -302,9 +302,16 @@ def create_app(
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
+    # One broker identity for every vault read: Gemini key, Google client.
+    broker_auth = BrokerAuth(
+        static_token=config.broker_token,
+        client_id=config.broker_client_id,
+        client_secret=config.broker_client_secret,
+        token_url=config.broker_token_url,
+    )
     keys = gemini_key or GeminiKey(
         url=config.broker_url,
-        token=config.broker_token,
+        auth=broker_auth,
         item=config.broker_item,
         field=config.broker_field,
         static_key=config.dev_api_key,
@@ -1947,7 +1954,7 @@ def create_app(
 
     google_secret = GeminiKey(  # lecteur de coffre générique, malgré son nom
         url=config.broker_url,
-        token=config.broker_token,
+        auth=broker_auth,
         item=config.google_secret_item,
         field=config.google_secret_field,
     )
