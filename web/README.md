@@ -227,6 +227,16 @@ par ailleurs trait pour trait à celle de l'app macOS — c'est la
 vérification du jalon. L'Opus reste l'optimisation visée (~10,7 Mo/h
 contre ~28) : le jour où il est validé, seule `AUDIO_PROFILE` change.
 
+### Joindre l'enregistrement après coup
+
+Une réunion transcrite sans enregistrement archivé propose « Joindre
+l'enregistrement » sur sa fiche. Le fichier choisi suit l'archivage
+habituel (compression sur le poste, envoi par morceaux), via la même file
+d'une compression à la fois. Sa durée est d'abord comparée à celle de la
+réunion : à quelques secondes près, l'envoi part ; au-delà, on demande
+confirmation, sans interdire (une transcription rognée est plus courte que
+son fichier). Un envoi interrompu ne bloque pas le suivant.
+
 ### Rodage sans intervention
 
 `?source=/chemin` charge un fichier servi par le serveur au lieu de
@@ -246,7 +256,9 @@ bout sans humain. Même origine, derrière Access comme le reste.
 |---|---|
 | `EKOVIDEO_WEB_STATE` | Racine de la base et des fenêtres en transit (défaut `./state`) |
 | `EKOVIDEO_ACCESS_TEAM_DOMAIN` / `EKOVIDEO_ACCESS_AUD` | Vérification du jeton Access |
-| `EKONUM_TOKEN` | Jeton du broker de secrets |
+| `EKONUM_CLIENT_SECRET` | Secret du client Keycloak `transcript`, remis par un administrateur une fois l'accès au broker approuvé dans le portail. Prioritaire : l'application demande alors un jeton `client_credentials` (scope `app-secret-broker`) et le broker applique les accords du portail |
+| `EKONUM_CLIENT_ID` / `EKONUM_TOKEN_URL` | Client et adresse d'échange (défauts `transcript` et le royaume `ekonum` d'identite.ekonum.fr) |
+| `EKONUM_TOKEN` | Ancien jeton statique du broker, utilisé tant que `EKONUM_CLIENT_SECRET` est absent |
 | `EKONUM_BROKER` | URL de base du broker (convention du parc ; `EKONUM_BROKER_URL` surcharge l'URL complète) |
 | `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « Ekonum - API Google Gemini » / « Clé API ») |
 | `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 50) |

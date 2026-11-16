@@ -54,7 +54,7 @@ from . import dashboard
 from .db import Database
 from .fx import EuroRate
 from .odoo import OdooGateway, OdooUnavailable
-from .secrets import GeminiKey, SecretError
+from .secrets import BrokerAuth, GeminiKey, SecretError
 from .identite import IdentiteGoogle
 from .recovery import register_recovery_routes
 from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
@@ -182,6 +182,8 @@ class OdooPublication(BaseModel):
     model: str = Field(min_length=1, max_length=64)
     record_id: int = Field(gt=0)
     header: str = Field(default="", max_length=500)
+    # The display_name the person picked, so the page names it at once.
+    name: str = Field(default="", max_length=300)
 
 
 class ContextPatch(BaseModel):
@@ -302,9 +304,16 @@ def create_app(
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
+    # One broker identity for every vault read: Gemini key, Google client.
+    broker_auth = BrokerAuth(
+        static_token=config.broker_token,
+        client_id=config.broker_client_id,
+        client_secret=config.broker_client_secret,
+        token_url=config.broker_token_url,
+    )
     keys = gemini_key or GeminiKey(
         url=config.broker_url,
-        token=config.broker_token,
+        auth=broker_auth,
         item=config.broker_item,
         field=config.broker_field,
         static_key=config.dev_api_key,
@@ -628,6 +637,7 @@ def create_app(
                 model=str(dossier["model"]),
                 record_id=int(dossier["record_id"]),
                 message_id=None,
+                name=str(dossier.get("name") or "")[:300] or None,
             )
         # Enregistré maintenant, pas à la fin : ajouter « Acritec » doit
         # faire remonter les termes qui l'accompagnent dès la réunion
@@ -899,6 +909,24 @@ def create_app(
             **_prevenir(passerelle, chatter, modele, record_id, titre),
         }
 
+    def record_url(model: str, record_id: int) -> str:
+        """Direct link to a record. Odoo 18+ reads a dotted path segment as
+        the model, so `/odoo/project.task/5` opens task 5 — whereas
+        `/odoo/project/5` would open *project* 5."""
+        if not (config.odoo_url and model and record_id):
+            return ""
+        return f"{config.odoo_url.rstrip('/')}/odoo/{model}/{int(record_id)}"
+
+    def odoo_link(job) -> dict:
+        model, record_id = job["odoo_model"], job["odoo_record_id"]
+        return {
+            "model": model,
+            "record_id": record_id,
+            "name": job["odoo_record_name"] or "",
+            "kind": OdooGateway.MODELES.get(model or "", ("", ""))[0],
+            "url": record_url(model, record_id) if record_id else "",
+        }
+
     def _prevenir(passerelle, chatter, modele: str, record_id: int, titre: str) -> dict:
         """Dit que c'est fait, là où la personne le verra.
 
@@ -906,7 +934,7 @@ def create_app(
         défaut. Ne pas prévenir n'annule pas le dépôt : c'est signalé,
         pas fatal.
         """
-        lien = f"{config.odoo_url.rstrip('/')}/odoo/{modele.split('.')[0]}/{record_id}"
+        lien = record_url(modele, record_id)
         texte = (
             f'Transcription déposée : <b>{html.escape(titre or "réunion")}</b> — '
             f'<a href="{html.escape(lien)}">ouvrir le dossier</a>.'
@@ -1215,12 +1243,36 @@ def create_app(
             ],
             "odoo": {
                 "depot": json.loads(job["odoo_depot_json"] or "{}"),
-                "model": job["odoo_model"],
-                "record_id": job["odoo_record_id"],
+                **odoo_link(job),
                 "message_id": job["odoo_message_id"],
                 "published_at": job["odoo_published_at"],
             },
         }
+
+    @app.get("/api/jobs/{job_id}/odoo/record")
+    def odoo_record(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        """Name of the linked record, asked from Odoo once then cached.
+
+        Kept out of the detail endpoint so a slow Odoo never delays the
+        meeting page; meetings linked before the name was stored, or by
+        recovery, fill it in here.
+        """
+        job = owned_job(job_id, owner_id)
+        if not job["odoo_record_id"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Aucun dossier Odoo lié.")
+        if not job["odoo_record_name"]:
+            try:
+                passerelle = odoo_pour(owner_id)
+                name = passerelle.record_name(job["odoo_model"], job["odoo_record_id"])
+            except (OdooUnavailable, CoffreIndisponible) as exc:
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+            if name:
+                db.set_odoo_record_name(
+                    job_id, model=job["odoo_model"],
+                    record_id=job["odoo_record_id"], name=name,
+                )
+            job = owned_job(job_id, owner_id)
+        return odoo_link(job)
 
     @app.patch("/api/jobs/{job_id}")
     def patch_context(
@@ -1656,6 +1708,7 @@ def create_app(
             model=payload.model,
             record_id=payload.record_id,
             message_id=message_id,
+            name=payload.name or None,
         )
         return {"message_id": message_id, "model": payload.model,
                 "record_id": payload.record_id}
@@ -1918,7 +1971,7 @@ def create_app(
 
     google_secret = GeminiKey(  # lecteur de coffre générique, malgré son nom
         url=config.broker_url,
-        token=config.broker_token,
+        auth=broker_auth,
         item=config.google_secret_item,
         field=config.google_secret_field,
     )

@@ -54,6 +54,38 @@ La liste technique est repliée ; le choix « Transcrire » seul disparaît pour
 un audio, les explications générales et celles du dialogue sont raccourcies.
 Les éditeurs sans transcription sont masqués. Aucun nouveau réglage permanent.
 
+## Prêt à livrer — joindre l’enregistrement après coup (30/10)
+
+Une réunion transcrite sans enregistrement archivé (envoi raté, onglet fermé
+trop tôt, fichier resté sur le poste d’un collègue) propose « Joindre
+l’enregistrement » sur sa fiche. Le fichier passe par l’archivage habituel ;
+sa durée est comparée à celle de la réunion avant l’envoi, et un écart se
+confirme sans être interdit (la transcription a pu être rognée). Aucun
+changement serveur : un envoi interrompu ne bloque pas le suivant, ce qu’un
+test vérifie désormais. Après livraison, la réunion 352 du 21/10 (« Voix.m4a »)
+se répare depuis le poste qui a gardé le fichier.
+
+## En préparation — lire le coffre par le portail (16/11)
+
+Transcript lit encore le coffre avec un jeton statique (`EKONUM_TOKEN`), créé à la main sur le
+tableau de bord du broker. Le chemin cible passe par le portail : l'application déclare ce qu'elle
+lit, un administrateur l'approuve, et le broker n'applique que ces accords.
+
+Fait : le manifeste déclare les deux fiches lues hors de `Applications/transcript`
+(`consumes.secrets`), et le serveur sait demander un jeton `client_credentials` dès que
+`EKONUM_CLIENT_SECRET` est posé, en gardant l'ancien jeton sinon. Rien ne change en production.
+
+Pour basculer :
+1. **Enrôler Transcript** (`auth.mode: portal-oidc`) : le portail l'exige pour l'accès au broker.
+   C'est la suite de la préparation Keycloak en revue (PR #179), à mener avec le portail.
+2. **Approuver** l'accès au broker et les deux fiches, page Applications du portail.
+3. **Remettre le secret** : `deploy/identite-configurer.py --apply --deliver-app-secret transcript --stack <stack>`.
+4. Vérifier une transcription et une connexion Google, puis **retirer `EKONUM_TOKEN`** du stack
+   et révoquer l'ancienne identité sur le tableau de bord du broker.
+
+Le secret du client Google est propre à Transcript : à terme, il gagne `Applications/transcript`
+(`bin/ekonum-app-key`), et sa déclaration quitte le manifeste.
+
 ## Prochains sujets
 
 ### Préparation en revue — identité Keycloak (29/10, portail 1888)
@@ -70,6 +102,7 @@ ou donnée réelle modifiée. Voir [le périmètre et les preuves](KEYCLOAK-IDEN
 |---|-------|------|
 | 1 | Accès Odoo relayé par le broker | en attente du portail |
 | 2 | Un modèle de transcription moins cher, ou européen | prochain sujet |
+| 2 bis | Garder en base les erreurs du navigateur | prêt |
 | 3 | Un serveur MCP | prêt (les jetons d'API existent) |
 | 4 | Supprimer l'original en local après envoi | prêt |
 | 5 | Stockage des vidéos : passer de Google Drive à GCS | quand Odoo en aura besoin |
@@ -89,6 +122,14 @@ délégation, le consentement et le format définitif du manifeste
 (`consumes.odoo`) sont en revue (PR #34 à #36 du portail). On s'y met dès
 qu'ils sont fusionnés : le manifeste de transcript doit suivre leur format
 final, pas un brouillon.
+
+## Garder en base les erreurs du navigateur
+
+**Pourquoi** : `/api/client-errors` ne fait qu’écrire dans le journal du
+conteneur, effacé à chaque redéploiement. Le 22/10, la cause de l’échec
+d’archivage de la réunion 352 était déjà perdue. Une table courte (réunion,
+étape, message, navigateur, date), purgée après quelques semaines, suffit ;
+pas d’écran dédié tant que personne n’en a besoin.
 
 ## Un modèle de transcription moins cher, ou européen
 

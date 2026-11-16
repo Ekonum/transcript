@@ -42,13 +42,14 @@ def _settings(root: Path, **overrides) -> Settings:
         access_aud="",
         broker_url="http://broker.invalid/v1/secret",
         broker_token="",
+        broker_client_id="transcript",
+        broker_client_secret="",
+        broker_token_url="",
         broker_item="Ekonum - API Gemini",
         broker_field="Clé API",
         odoo_url="",
         odoo_database="",
         odoo_login="",
-        odoo_broker_item="Ekonum - API Odoo",
-        odoo_broker_field="Clé API",
         secret_key=_CLE_DE_TEST,
         monthly_budget_usd=50.0,
         corbeille_jours=30,
@@ -2296,6 +2297,23 @@ class VideoTestCase(_Fixture):
         self.assertFalse(fiche["video"]["en_cours"])
         self.assertEqual(self.drive.fichiers["drive-1"], b"0123456789")
 
+    def test_joindre_apres_un_envoi_interrompu(self):
+        """Un envoi abandonné (onglet fermé) ne bloque pas « Joindre
+        l'enregistrement » : le nouvel envoi repart de zéro et aboutit."""
+        job_id = self._reunion()
+        self.client.post(f"/api/jobs/{job_id}/video", json={"taille": 10})
+        self.client.put(f"/api/jobs/{job_id}/video?debut=0", content=b"0123")
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertFalse(fiche["video"]["presente"])
+        self.assertTrue(fiche["video"]["en_cours"])
+
+        fin = self._envoyer(job_id, b"abcdefgh")
+        self.assertTrue(fin["termine"])
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertTrue(fiche["video"]["presente"])
+        self.assertFalse(fiche["video"]["en_cours"])
+        self.assertIn(b"abcdefgh", self.drive.fichiers.values())
+
     def test_la_session_drive_ne_sort_jamais_du_serveur(self):
         """Elle vaut autorisation d'écrire : le navigateur ne la voit pas."""
         job_id = self._reunion()
@@ -3124,3 +3142,86 @@ class DashboardBuildTest(unittest.TestCase):
     def test_le_cours_de_la_bce_se_lit(self):
         from app.fx import parse_ecb
         self.assertEqual(parse_ecb(ECB_XML), (1.25, "2026-10-21"))
+
+
+class OdooRecordNameTest(_Fixture):
+    """The meeting page names the linked record and links to it, instead
+    of showing `project.project #100`."""
+
+    def setUp(self):
+        super().setUp()
+        self.reads: list[tuple[str, int]] = []
+        test = self
+        from app.odoo import OdooGateway, OdooUnavailable
+
+        class Gateway(OdooGateway):
+            down = False
+
+            def record_name(self, model, record_id):
+                if Gateway.down:
+                    raise OdooUnavailable("Odoo ne répond pas.")
+                test.reads.append((model, record_id))
+                return "Paie Acritec - mise en place"
+
+        self.Gateway = Gateway
+        self.settings = _settings(self.root, odoo_url="https://www.ekonum.fr")
+        self.app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo_factory=lambda _: Gateway(
+                url="https://www.ekonum.fr", database="d", login="l", api_key="k"),
+        )
+        self.client = self._client_pour(self.app)
+
+    def _job(self, **odoo_record) -> int:
+        job = self.client.post("/api/jobs", json={
+            "filename": "reunion.m4a", "duration_seconds": 60.0,
+            "model": "gemini-3.8-flash", "language": "fr",
+            "context": {"odoo_record": odoo_record} if odoo_record else {},
+        })
+        self.assertEqual(job.status_code, 201, job.text)
+        return job.json()["job_id"]
+
+    def test_name_chosen_before_transcription_is_shown_with_kind_and_link(self):
+        job_id = self._job(model="project.project", record_id=100, name="Paie Acritec")
+        odoo = self.client.get(f"/api/jobs/{job_id}/detail").json()["odoo"]
+        self.assertEqual(odoo["name"], "Paie Acritec")
+        self.assertEqual(odoo["kind"], "projet")
+        self.assertEqual(odoo["url"], "https://www.ekonum.fr/odoo/project.project/100")
+        self.assertEqual(self.reads, [])
+
+    def test_task_link_opens_the_task_not_a_project(self):
+        """`/odoo/project/5` would open project 5: the model must be dotted."""
+        job_id = self._job(model="project.task", record_id=5, name="Reprise")
+        odoo = self.client.get(f"/api/jobs/{job_id}/detail").json()["odoo"]
+        self.assertEqual(odoo["url"], "https://www.ekonum.fr/odoo/project.task/5")
+
+    def test_missing_name_is_fetched_once_then_cached(self):
+        job_id = self._job(model="crm.lead", record_id=364)
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}/detail").json()["odoo"]["name"], "")
+        first = self.client.get(f"/api/jobs/{job_id}/odoo/record").json()
+        self.assertEqual(first["name"], "Paie Acritec - mise en place")
+        self.assertEqual(first["kind"], "opportunité")
+        self.client.get(f"/api/jobs/{job_id}/odoo/record")
+        self.assertEqual(self.reads, [("crm.lead", 364)])
+        detail = self.client.get(f"/api/jobs/{job_id}/detail").json()["odoo"]
+        self.assertEqual(detail["name"], "Paie Acritec - mise en place")
+
+    def test_odoo_down_leaves_the_page_working(self):
+        job_id = self._job(model="crm.lead", record_id=364)
+        self.Gateway.down = True
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}/odoo/record").status_code, 502)
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}/detail").status_code, 200)
+
+    def test_no_linked_record(self):
+        job_id = self._job()
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}/odoo/record").status_code, 404)
+
+    def test_name_follows_the_record(self):
+        job_id = self._job(model="crm.lead", record_id=364, name="Acritec")
+        self.db.set_odoo_link(job_id, model="crm.lead", record_id=364, message_id=9)
+        self.assertEqual(self.db.get_job(job_id)["odoo_record_name"], "Acritec")
+        self.db.set_odoo_link(job_id, model="sale.order", record_id=12, message_id=None)
+        self.assertIsNone(self.db.get_job(job_id)["odoo_record_name"])
+        self.db.set_odoo_record_name(job_id, model="crm.lead", record_id=364, name="Old")
+        self.assertIsNone(self.db.get_job(job_id)["odoo_record_name"])
