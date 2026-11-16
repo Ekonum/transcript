@@ -45,7 +45,10 @@ class Settings:
 
     # Broker de secrets Ekonum
     broker_url: str
-    broker_token: str
+    broker_token: str             # legacy static token (broker dashboard)
+    broker_client_id: str         # portal path: the app's own Keycloak client…
+    broker_client_secret: str     # …its secret, delivered by an administrator…
+    broker_token_url: str         # …and where to exchange it
     broker_item: str
     broker_field: str
 
@@ -54,8 +57,6 @@ class Settings:
     odoo_url: str
     odoo_database: str
     odoo_login: str
-    odoo_broker_item: str
-    odoo_broker_field: str
 
     # Chiffre les clés API Odoo personnelles. Absente, le serveur refuse
     # d'en enregistrer une : stocker en clair « en attendant » est le
@@ -138,6 +139,12 @@ class Settings:
             access_aud=os.environ.get("EKOVIDEO_ACCESS_AUD", "").strip(),
             broker_url=_broker_url(),
             broker_token=os.environ.get("EKONUM_TOKEN", "").strip(),
+            broker_client_id=os.environ.get("EKONUM_CLIENT_ID", "transcript").strip(),
+            broker_client_secret=os.environ.get("EKONUM_CLIENT_SECRET", "").strip(),
+            broker_token_url=os.environ.get(
+                "EKONUM_TOKEN_URL",
+                "https://identite.ekonum.fr/realms/ekonum/protocol/openid-connect/token",
+            ).strip(),
             broker_item=os.environ.get(
                 # Le nom exact dans le coffre — vérifié avec « ekonum-secret
                 # list ». « Ekonum - API Gemini » n'existe pas, et le broker
@@ -148,12 +155,6 @@ class Settings:
             odoo_url=os.environ.get("EKOVIDEO_ODOO_URL", "").strip(),
             odoo_database=os.environ.get("EKOVIDEO_ODOO_DB", "").strip(),
             odoo_login=os.environ.get("EKOVIDEO_ODOO_LOGIN", "").strip(),
-            odoo_broker_item=os.environ.get(
-                # Nom exact dans le coffre, vérifié avec « ekonum-secret
-                # list » : « Ekonum - API Odoo » n'existe pas.
-                "EKOVIDEO_ODOO_BROKER_ITEM", "contact - API Odoo"
-            ),
-            odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
             # projects/<numéro>/locations/global/workloadIdentityPools/<pool>/providers/<fournisseur>

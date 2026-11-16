@@ -39,7 +39,14 @@ consumes:
     - ir.model
   ekonum_apps:
     - ekonum-ui                   # CSS et polices, versionnés dans web/client/vendor à la version ci-dessous
-    - secret-broker               # clé Gemini (web/app/secrets.py)
+    - secret-broker               # clé Gemini et secret du client Google (web/app/secrets.py)
+  secrets:                        # fiches lues au broker hors de Applications/transcript
+    - item: Ekonum - API Google Gemini
+      field: Clé API
+      justification: Transcrire les réunions, sonder un extrait et enquêter sur le dossier Odoo ; clé partagée de l'équipe.
+    - item: Ekonum - Google transcript OAuth
+      field: Client secret
+      justification: Connecter chacun à son Google Drive pour récupérer ses anciens enregistrements.
   external:
     - gemini                      # transcription, sonde et enquête
     - cloudflare-access           # vérification de l'identité

@@ -65,6 +65,27 @@ changement serveur : un envoi interrompu ne bloque pas le suivant, ce qu’un
 test vérifie désormais. Après livraison, la réunion 352 du 21/10 (« Voix.m4a »)
 se répare depuis le poste qui a gardé le fichier.
 
+## En préparation — lire le coffre par le portail (16/11)
+
+Transcript lit encore le coffre avec un jeton statique (`EKONUM_TOKEN`), créé à la main sur le
+tableau de bord du broker. Le chemin cible passe par le portail : l'application déclare ce qu'elle
+lit, un administrateur l'approuve, et le broker n'applique que ces accords.
+
+Fait : le manifeste déclare les deux fiches lues hors de `Applications/transcript`
+(`consumes.secrets`), et le serveur sait demander un jeton `client_credentials` dès que
+`EKONUM_CLIENT_SECRET` est posé, en gardant l'ancien jeton sinon. Rien ne change en production.
+
+Pour basculer :
+1. **Enrôler Transcript** (`auth.mode: portal-oidc`) : le portail l'exige pour l'accès au broker.
+   C'est la suite de la préparation Keycloak en revue (PR #179), à mener avec le portail.
+2. **Approuver** l'accès au broker et les deux fiches, page Applications du portail.
+3. **Remettre le secret** : `deploy/identite-configurer.py --apply --deliver-app-secret transcript --stack <stack>`.
+4. Vérifier une transcription et une connexion Google, puis **retirer `EKONUM_TOKEN`** du stack
+   et révoquer l'ancienne identité sur le tableau de bord du broker.
+
+Le secret du client Google est propre à Transcript : à terme, il gagne `Applications/transcript`
+(`bin/ekonum-app-key`), et sa déclaration quitte le manifeste.
+
 ## Prochains sujets
 
 | # | Sujet | État |
