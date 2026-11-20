@@ -269,6 +269,10 @@ bout sans humain. Même origine, derrière Access comme le reste.
 
 ### Comparer les transcriptions avant activation
 
+Le [banc d’essai qualité, coût et délai](docs/BANC-ESSAI-TRANSCRIPTION.md)
+documente la construction des références audio, la séparation des cas de mise
+au point et de confirmation, et la comparaison des variantes.
+
 Sur une instance d’essai, vérifier que l’identité du service peut lire la clé du projet. Activer les deux options et recréer le conteneur. Utiliser le même audio et le même contexte disponible avant la réunion pour les deux fournisseurs. Laisser le dépôt Odoo désactivé pendant la comparaison. Le navigateur envoie les fenêtres audio et, pour OpenAI, un indice de hauteur de voix par demi-seconde. Les indices aident à séparer deux interlocuteurs partageant un téléphone.
 
 Le serveur conserve les horodatages acoustiques, croise les deux transcriptions et les mots horodatés, puis vérifie que la relecture couvre la fenêtre entière. Un échec de relecture laisse le traitement en erreur. Les étapes déjà facturées sont réutilisées lors du renvoi de la même fenêtre.

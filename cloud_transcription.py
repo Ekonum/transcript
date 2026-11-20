@@ -1561,6 +1561,7 @@ class GeminiClient:
         mime_type: str,
         prompt: str,
         schema: dict,
+        thinking_level: str | None = None,
     ) -> dict:
         """Audio in, JSON out, against an arbitrary schema.
 
@@ -1575,7 +1576,9 @@ class GeminiClient:
             "temperature": 0.2,
         }
         thinking = entry.get("thinking")
-        if thinking == "level_low":
+        if thinking_level is not None:
+            generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
+        elif thinking == "level_low":
             generation_config["thinkingConfig"] = {"thinkingLevel": "low"}
         elif thinking == "budget_zero":
             generation_config["thinkingConfig"] = {"thinkingBudget": 0}
@@ -1600,7 +1603,11 @@ class GeminiClient:
             # The thinking knob is the most model-version-sensitive part
             # of the request; if a future model rejects it, retry plain
             # rather than failing the meeting.
-            if "thinking" not in str(exc).lower() or "thinkingConfig" not in str(payload):
+            if (
+                thinking_level is not None
+                or "thinking" not in str(exc).lower()
+                or "thinkingConfig" not in generation_config
+            ):
                 raise
             generation_config.pop("thinkingConfig", None)
             body, _ = self._json_request("POST", url, payload=payload)
