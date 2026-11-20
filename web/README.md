@@ -261,8 +261,21 @@ bout sans humain. Même origine, derrière Access comme le reste.
 | `EKONUM_TOKEN` | Ancien jeton statique du broker, utilisé tant que `EKONUM_CLIENT_SECRET` est absent |
 | `EKONUM_BROKER` | URL de base du broker (convention du parc ; `EKONUM_BROKER_URL` surcharge l'URL complète) |
 | `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « transcript - API Google Gemini » / « Clé API ») |
+| `EKOVIDEO_OPENAI_CONTEXT` | À `1`, la sonde, la recherche guidée de dossier et la relecture manuelle passent par OpenAI. Défaut `0`. |
+| `EKOVIDEO_OPENAI_TRANSCRIPTION` | À `1`, le navigateur utilise le parcours OpenAI pour les nouveaux traitements. Défaut `0` (Gemini). |
+| `EKONUM_OPENAI_ITEM` | Élément du coffre contenant la clé du projet Transcript. Défaut « Ekonum - OpenAI Platform Transcript key », champ « Clé API ». |
 | `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 32, soit ~30 €) |
 | `EKOVIDEO_ODOO_URL` / `_DB` / `_LOGIN` | Odoo — facultatif ; absent, l'enrichissement se tait |
+
+### Comparer les transcriptions avant activation
+
+Sur une instance d’essai, vérifier que l’identité du service peut lire la clé du projet. Activer les deux options et recréer le conteneur. Utiliser le même audio et le même contexte disponible avant la réunion pour les deux fournisseurs. Laisser le dépôt Odoo désactivé pendant la comparaison. Le navigateur envoie les fenêtres audio et, pour OpenAI, un indice de hauteur de voix par demi-seconde. Les indices aident à séparer deux interlocuteurs partageant un téléphone.
+
+Le serveur conserve les horodatages acoustiques, croise les deux transcriptions et les mots horodatés, puis vérifie que la relecture couvre la fenêtre entière. Un échec de relecture laisse le traitement en erreur. Les étapes déjà facturées sont réutilisées lors du renvoi de la même fenêtre.
+
+Pour comparer sur un verbatim indépendant vérifié à l’écoute, exporter chaque résultat en JSON avec une liste `segments` contenant `speaker` et `text`. Lancer `python -m transcription_eval.compare --reference reference.json --gemini gemini.json --openai openai.json --term Odoo`. Contrôler aussi à l’écoute les adresses exactes, montants, négations, noms et tours de parole courts. Une différence avec une transcription Gemini seule mesure un désaccord entre moteurs. La décision de bascule dépend de la fidélité à l’audio.
+
+Pour revenir à Gemini pour les nouvelles réunions, remettre les deux options à `0` puis recréer le conteneur. Les réunions déjà enregistrées conservent leur modèle et leur transcription.
 
 ## Authentification
 

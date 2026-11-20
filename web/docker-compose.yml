@@ -39,6 +39,11 @@ services:
       EKONUM_BROKER_ITEM: "transcript - API Google Gemini"
       EKONUM_BROKER_FIELD: "Clé API"
 
+      # Activate only after comparing representative recordings with Gemini.
+      EKOVIDEO_OPENAI_TRANSCRIPTION: "${EKOVIDEO_OPENAI_TRANSCRIPTION:-0}"
+      EKOVIDEO_OPENAI_CONTEXT: "${EKOVIDEO_OPENAI_CONTEXT:-0}"
+      EKONUM_OPENAI_ITEM: "${EKONUM_OPENAI_ITEM:-Ekonum - OpenAI Platform Transcript key}"
+
       # Plafond mensuel d'équipe (~30 €).
       EKOVIDEO_MONTHLY_BUDGET_USD: "32"
 

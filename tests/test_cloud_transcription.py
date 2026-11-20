@@ -116,7 +116,7 @@ class PerModelChunkingTest(unittest.TestCase):
         from cloud_transcription import chunk_seconds_for_model
 
         self.assertEqual(chunk_seconds_for_model("gemini-3.5-flash"), 30 * 60)
-        self.assertEqual(chunk_seconds_for_model("gpt-4o-transcribe-diarize"), 40 * 60)
+        self.assertEqual(chunk_seconds_for_model("gpt-4o-transcribe-diarize"), 18 * 60)
         self.assertEqual(chunk_seconds_for_model("gladia-solaria-3"), 120 * 60)
         self.assertEqual(chunk_seconds_for_model("assemblyai-universal-3"), 180 * 60)
         self.assertEqual(chunk_seconds_for_model("deepgram-nova-3"), 120 * 60)
@@ -1058,6 +1058,17 @@ class STTProviderParsingTest(unittest.TestCase):
         )
         self.assertEqual(result.segments[0]["speaker"], "Intervenant 1")
         self.assertEqual(result.segments[1]["speaker"], "Intervenant 2")
+
+    def test_openai_requires_diarization_and_does_not_send_unsupported_prompt(self):
+        def opener(request, timeout=None):
+            self.assertIn(b'diarized_json', request.data)
+            self.assertIn(b'name="chunking_strategy"', request.data)
+            self.assertNotIn(b'name="prompt"', request.data)
+            return _FakeResponse({"text": "Bonjour."})
+
+        provider = get_cloud_provider("openai", "key", opener=opener)
+        with self.assertRaisesRegex(CloudTranscriptionError, "diarisation"):
+            provider.transcribe(str(self.audio), model_id="gpt-4o-transcribe-diarize", context=_ctx(60))
 
     def test_chunk_offset_applied(self):
         opener = _router([

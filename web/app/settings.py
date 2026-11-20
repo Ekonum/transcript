@@ -122,6 +122,10 @@ class Settings:
     dev_api_key: str
 
     # Préparation 1888 : aucun changement de mode implicite à l'installation.
+    openai_transcription: bool = False
+    openai_context: bool = False
+    openai_item: str = "Ekonum - OpenAI Platform Transcript key"
+    dev_openai_key: str = ""
     auth_mode: str = "access-jwt"
     keycloak_issuer: str = ""
     keycloak_audience: str = ""
@@ -143,6 +147,10 @@ class Settings:
         return cls(
             db_path=Path(os.environ.get("EKOVIDEO_WEB_DB", state / "ekovideo.db")),
             chunk_dir=Path(os.environ.get("EKOVIDEO_WEB_CHUNKS", state / "chunks")),
+            openai_transcription=_flag("EKOVIDEO_OPENAI_TRANSCRIPTION"),
+            openai_context=_flag("EKOVIDEO_OPENAI_CONTEXT"),
+            openai_item=os.environ.get("EKONUM_OPENAI_ITEM", "Ekonum - OpenAI Platform Transcript key").strip(),
+            dev_openai_key=os.environ.get("OPENAI_API_KEY", "").strip() if dev else "",
             auth_mode=os.environ.get("EKOVIDEO_AUTH_MODE", "access-jwt").strip(),
             keycloak_issuer=os.environ.get("EKOVIDEO_KEYCLOAK_ISSUER", "").strip(),
             keycloak_audience=os.environ.get("EKOVIDEO_KEYCLOAK_AUDIENCE", "").strip(),

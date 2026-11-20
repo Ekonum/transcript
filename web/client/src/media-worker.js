@@ -18,6 +18,7 @@ import {
 // WebCodecs n'encode que l'Opus et l'AAC : le MP3 vient d'un paquet
 // d'extension Mediabunny, qui s'enregistre auprès du cœur. Il n'est pas
 // embarqué d'office dans le paquet principal.
+import { voiceCues } from './voice-cues.js';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 
 registerMp3Encoder();
@@ -109,6 +110,8 @@ self.onmessage = async (event) => {
       const started = performance.now();
       const { format, type } = outputFormat(audio);
       const target = new BufferTarget();
+      const cues = audio.voice_cues ? voiceCues(chunk.end - chunk.start) : null;
+      let firstTimestamp;
       try {
         const conversion = await Conversion.init({
           input: new Input({ formats: ALL_FORMATS, source: sourceOf(file) }),
@@ -122,6 +125,13 @@ self.onmessage = async (event) => {
             numberOfChannels: audio.channels,
             sampleRate: audio.sample_rate,
             quality: new Quality({ bitrate: audio.bitrate }),
+            ...(cues ? { process(sample) {
+              firstTimestamp ??= sample.timestamp;
+              const samples = new Float32Array(sample.numberOfFrames);
+              sample.copyTo(samples, { planeIndex: 0, format: 'f32-planar' });
+              cues.add(samples, Math.round((sample.timestamp - firstTimestamp) * sample.sampleRate));
+              return sample;
+            } } : {}),
           },
         });
         conversion.onProgress = (ratio) =>
@@ -142,7 +152,8 @@ self.onmessage = async (event) => {
 
       stage = 'envoi';
       const response = await envoyer(`/api/jobs/${jobId}/chunks/${chunk.index}`, bytes, type,
-        (attempt, wait) => say({ kind: 'retrying', index: chunk.index, attempt, wait }));
+        (attempt, wait) => say({ kind: 'retrying', index: chunk.index, attempt, wait }),
+        cues ? btoa(String.fromCharCode(...cues.bytes())) : '');
       if (response.status === 409) {
         say({ kind: 'cancelled' });
         return;
@@ -162,12 +173,13 @@ self.onmessage = async (event) => {
 /** Envoie une fenêtre, en réessayant sur ce qui passe : coupure réseau,
  *  serveur qui redémarre (5xx), trop de demandes (429). Un refus franc
  *  (4xx) ne se réessaie pas — il dit quelque chose. */
-async function envoyer(url, bytes, type, onRetry) {
+async function envoyer(url, bytes, type, onRetry, voicing) {
   const attentes = [2000, 5000, 15000, 30000];
   for (let essai = 0; ; essai += 1) {
     try {
       const response = await fetch(url, {
-        method: 'PUT', headers: { 'Content-Type': type }, body: bytes,
+        method: 'PUT', headers: { 'Content-Type': type,
+          ...(voicing ? { 'X-Transcript-Voicing': voicing } : {}) }, body: bytes,
       });
       const passager = response.status >= 500 || response.status === 429;
       if (!passager || essai >= attentes.length) return response;

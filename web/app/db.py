@@ -1705,6 +1705,17 @@ class Database:
 
     # -- dépenses ------------------------------------------------------
 
+    def save_openai_stage(self, job_id, index, stage, checkpoint, usage):
+        """Persist a paid result and its cost together for retry after a failed step."""
+        with self.connect() as conn:
+            conn.execute("UPDATE job_chunks SET result_json = ? WHERE job_id = ? AND idx = ?",
+                         (json.dumps(checkpoint, ensure_ascii=False), job_id, index))
+            conn.execute(
+                "INSERT INTO api_usage (job_id, provider, model, step, input_tokens, output_tokens, "
+                "cost_usd) VALUES (?, 'openai', ?, ?, ?, ?, ?)",
+                (job_id, usage.model, stage, usage.input_tokens, usage.output_tokens, usage.cost_usd),
+            )
+
     def add_api_usage(
         self,
         *,

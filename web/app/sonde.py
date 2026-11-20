@@ -12,6 +12,9 @@ transcription. Se tromper ici ne coûte qu'une proposition refusée.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -19,10 +22,14 @@ from cloud_transcription import (
     CloudTranscriptionError,
     CloudUsage,
     GeminiClient,
+    CloudPromptContext,
+    OpenAITranscribeProvider,
     canonical_cloud_model_id,
     compute_cost_usd,
     provider_for_model,
 )
+
+from .openai_text import CONTEXT_AUDIO_MODEL, OpenAITextClient, TEXT_MODEL
 
 # Pas le moins cher du catalogue : un nom de société mal entendu se
 # cherche mal dans Odoo, et la mauvaise liaison qui s'ensuit coûte plus
@@ -135,6 +142,20 @@ def identifier(
 ) -> Indices:
     """Écoute la fenêtre et rend les indices. Lève en cas d'échec —
     l'appelant décide si la sonde est bloquante (elle ne l'est pas)."""
+    if model_id == TEXT_MODEL:
+        # Browser uploads constant-bitrate mono MP3 at 64 kbit/s.
+        seconds = min(FENETRE_SECONDES, Path(audio).stat().st_size / 8000)
+        raw = OpenAITranscribeProvider(api_key, opener=opener).transcribe(
+            audio, model_id=CONTEXT_AUDIO_MODEL,
+            context=CloudPromptContext(language="fr" if langue == "français" else "",
+                                       chunk_duration_seconds=seconds),
+        )
+        data, usage = OpenAITextClient(api_key, opener=opener).structured(
+            PROMPT.format(langue=langue) + "\nAnalyse le relevé de l’extrait ci-dessous.",
+            " ".join(s["text"] for s in raw.segments), SCHEMA,
+        )
+        usage.add(raw.usage)
+        return _indices(data, usage)
     client = GeminiClient(api_key, opener=opener)
     fichier: dict = {}
     try:
@@ -157,8 +178,6 @@ def _lire(payload: dict, *, model_id: str) -> Indices:
     for part in (candidats[0].get("content", {}).get("parts") or []) if candidats else []:
         texte += str(part.get("text") or "")
     try:
-        import json
-
         donnees = json.loads(texte or "{}")
     except ValueError as exc:
         raise CloudTranscriptionError(
@@ -170,18 +189,21 @@ def _lire(payload: dict, *, model_id: str) -> Indices:
     sortie = int(meta.get("candidatesTokenCount") or 0) + int(
         meta.get("thoughtsTokenCount") or 0
     )
+    usage = CloudUsage(
+        model=canonical_cloud_model_id(model_id), input_tokens=entree, output_tokens=sortie,
+        cost_usd=compute_cost_usd(model_id, entree, sortie),
+    )
+    return _indices(donnees, usage)
+
+
+def _indices(donnees: dict, usage: CloudUsage) -> Indices:
     return Indices(
         organisations=_liste(donnees.get("organisations")),
         personnes=_liste(donnees.get("personnes")),
         sujets=_liste(donnees.get("sujets"), maximum=5),
         variantes=_liste(donnees.get("variantes")),
         resume=str(donnees.get("resume") or "").strip(),
-        usage=CloudUsage(
-            model=canonical_cloud_model_id(model_id),
-            input_tokens=entree,
-            output_tokens=sortie,
-            cost_usd=compute_cost_usd(model_id, entree, sortie),
-        ),
+        usage=usage,
     )
 
 

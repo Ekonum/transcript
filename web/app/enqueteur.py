@@ -31,6 +31,8 @@ from cloud_transcription import (
     compute_cost_usd,
 )
 
+from .openai_text import OpenAITextClient, TEXT_MODEL
+
 log = logging.getLogger("ekovideo.web")
 
 # Le modèle qui raisonne n'est pas celui qui écoute : ici on paie pour
@@ -237,13 +239,16 @@ def enqueter(
     ce qu'elle a dit pour guider la recherche, et les dossiers déjà
     proposés qu'elle a refusés.
     """
-    client = GeminiClient(api_key, opener=opener)
+    use_openai = model_id == TEXT_MODEL
+    client = (OpenAITextClient if use_openai else GeminiClient)(api_key, opener=opener)
     usage = CloudUsage()
     journal: list[str] = []
     memoire: dict[str, Any] = {}
     contents: list[dict] = [
         {"role": "user", "parts": [{"text": _demande(indices, echanges, ecartes)}]}
     ]
+
+    messages = [{"role": "user", "content": contents[0]["parts"][0]["text"]}]
 
     for tour in range(tours_max):
         # Le dernier tour ne propose plus que `conclure` : un modèle qui
@@ -257,21 +262,37 @@ def enqueter(
                 "parts": [{"text": "Dernier tour : conclus maintenant, avec ce "
                                    "que tu as. Sans certitude, conclus sans dossier."}],
             })
-        reponse = client.generate_with_tools(
-            model_id=model_id, contents=contents, tools=outils, system=SYSTEME
-        )
-        _cumuler(usage, reponse, model_id)
-        appels = _appels(reponse)
+        if use_openai:
+            if dernier:
+                messages.append({"role": "user", "content": contents[-1]["parts"][0]["text"]})
+            output, cost = client.investigate(messages, SYSTEME, outils)
+            usage.add(cost)
+            messages.extend(output)
+            try:
+                appels = [{"id": c["call_id"], "name": c["name"], "args": json.loads(c["arguments"])}
+                          for c in output if c["type"] == "function_call"]
+                if any(not isinstance(a["args"], dict) for a in appels):
+                    raise ValueError
+            except (KeyError, TypeError, ValueError) as exc:
+                raise CloudTranscriptionError("Appel d’outil OpenAI illisible.") from exc
+            raison = "Aucun dossier proposé."
+        else:
+            reponse = client.generate_with_tools(
+                model_id=model_id, contents=contents, tools=outils, system=SYSTEME
+            )
+            _cumuler(usage, reponse, model_id)
+            appels = _appels(reponse)
+            contents.append(_tour_du_modele(reponse))
+            raison = _texte(reponse)
         if not appels:
             # Le modèle a répondu en prose : on prend ce qu'il dit comme
             # un renoncement motivé plutôt que d'insister.
             return Conclusion(
-                raison=_texte(reponse) or "Aucun dossier proposé.",
+                raison=raison or "Aucun dossier proposé.",
                 journal=journal,
                 usage=usage,
             )
 
-        contents.append(_tour_du_modele(reponse))
         reponses: list[dict] = []
         for appel in appels:
             nom = appel.get("name") or ""
@@ -280,6 +301,10 @@ def enqueter(
                 return _conclure(args, lire, journal, usage)
             resultat, ligne = _executer(nom, args, chercher, lire, agenda, memoire)
             journal.append(ligne)
+            if use_openai:
+                messages.append({"type": "function_call_output", "call_id": appel["id"],
+                                 "output": json.dumps(resultat, ensure_ascii=False)})
+                continue
             reponses.append(
                 {"functionResponse": {"name": nom, "response": {"resultat": resultat}}}
             )
