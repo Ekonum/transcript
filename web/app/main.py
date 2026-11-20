@@ -14,6 +14,9 @@ part en tâche de fond ; le navigateur suit l'avancement par ``GET``.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import secrets
 import html
@@ -34,6 +37,10 @@ from pydantic import BaseModel, Field
 
 from cloud_transcription import (
     enrich_transcript_via_gemini,
+    DEFAULT_CLOUD_MODEL,
+    ENRICH_SCHEMA,
+    OpenAITranscribeProvider,
+    build_enrich_prompt,
     CLOUD_TRANSCRIPTION_MODELS,
     CloudChunkResult,
     CloudTranscriptionError,
@@ -61,7 +68,9 @@ from .identite import IdentiteGoogle
 from .recovery import register_recovery_routes
 from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
 from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter, enqueter_confirme
-from .sonde import FENETRE_SECONDES, fournisseur, identifier
+from .sonde import FENETRE_SECONDES, identifier
+from .openai_text import CONTEXT_AUDIO_MODEL, DIARIZE_MODEL, REVIEW_MODEL, TEXT_MODEL, OpenAITextClient, text_cost
+from .openai_review import IncompleteReview, review_window
 from .settings import Settings
 from .terms import replace_term
 from .transcription import context_for_chunk, transcribe_chunk, transcript_text
@@ -133,7 +142,7 @@ def liaison_sans_demander(confiance: str, seuil: str) -> bool:
 class JobRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=512)
     duration_seconds: float = Field(gt=0)
-    model: str = Field(min_length=1)
+    model: str | None = Field(default=None, min_length=1)
     language: str = "fr"
     context: dict[str, Any] = Field(default_factory=dict)
     # Quand la réunion a eu lieu — pas quand on l'a déposée. Proposée
@@ -303,6 +312,7 @@ def create_app(
     *,
     database: Database | None = None,
     gemini_key: GeminiKey | None = None,
+    openai_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
     keycloak_verifier: KeycloakVerifier | None = None,
     oidc_login: OidcLogin | None = None,
@@ -327,6 +337,18 @@ def create_app(
         field=config.broker_field,
         static_key=config.dev_api_key,
     )
+    openai_keys = openai_key or GeminiKey(
+        url=config.broker_url, auth=broker_auth, item=config.openai_item,
+        field="Clé API", static_key=config.dev_openai_key,
+    )
+    default_model = DIARIZE_MODEL if config.openai_transcription else DEFAULT_CLOUD_MODEL
+    offered_models = {entry["id"] for entry in CLOUD_TRANSCRIPTION_MODELS
+                      if entry.get("provider") == "gemini"}
+    if config.openai_transcription:
+        offered_models.add(DIARIZE_MODEL)
+    context_keys = openai_keys if config.openai_context else keys
+    context_provider = "openai" if config.openai_context else "gemini"
+    investigation_model = TEXT_MODEL if config.openai_context else MODELE_ENQUETE
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
     if config.auth_mode not in {"access-jwt", "keycloak-jwt"}:
         raise RuntimeError("Mode d'authentification inconnu.")
@@ -527,8 +549,9 @@ def create_app(
         except Exception as exc:  # noqa: BLE001 — on rapporte, on ne lève pas
             problemes.append(f"base : {exc}")
         try:
-            if not keys.get():
-                problemes.append("broker : clé Gemini vide")
+            for provider_keys in {openai_keys if config.openai_transcription else keys, context_keys}:
+                if not provider_keys.get():
+                    problemes.append("broker : clé de transcription vide")
         except SecretError as exc:
             problemes.append(f"broker : {exc}")
         if problemes:
@@ -597,14 +620,17 @@ def create_app(
             )
         return FileResponse(page)
 
+    def audio_profile(model):
+        return {**AUDIO_PROFILE, "voice_cues": True} if model == DIARIZE_MODEL else AUDIO_PROFILE
+
     @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
     def create_job(payload: JobRequest, owner_id: int = Depends(current_user)) -> dict:
         # `cloud_model_entry` accepte volontairement un identifiant inconnu
         # — l'app macOS laisse saisir un modèle tout juste sorti — en le
         # facturant au tarif le plus cher. Ici le modèle vient d'une liste
         # fermée : une coquille doit être refusée, pas facturée au prix fort.
-        model = canonical_cloud_model_id(payload.model)
-        if model not in {entry["id"] for entry in CLOUD_TRANSCRIPTION_MODELS}:
+        model = canonical_cloud_model_id(payload.model or default_model)
+        if model not in offered_models:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 f"Modèle inconnu : {payload.model!r}.",
@@ -612,6 +638,12 @@ def create_app(
 
         # Garde-fou budget : avant le premier octet uploadé, pas après.
         estimate = estimate_cloud_cost(payload.duration_seconds, model)
+        if model == DIARIZE_MODEL:
+            seconds = payload.duration_seconds
+            windows = plan_audio_chunks(seconds, chunk_seconds_for_model(model))
+            estimate["cost_usd"] += estimate_cloud_cost(seconds, CONTEXT_AUDIO_MODEL)["cost_usd"] + seconds * .006 / 60
+            estimate["cost_usd"] += text_cost(int(seconds * 18) + len(windows) * 1600,
+                                              int(seconds * 22) + len(windows) * 1600, model=REVIEW_MODEL)
         spent = db.month_spend_usd()
         if spent + estimate["cost_usd"] > config.monthly_budget_usd:
             raise HTTPException(
@@ -684,7 +716,7 @@ def create_app(
                 {"index": i, "start": start, "end": end}
                 for i, (start, end) in enumerate(windows)
             ],
-            "audio": AUDIO_PROFILE,
+            "audio": audio_profile(model),
         }
 
     @app.put("/api/jobs/{job_id}/chunks/{index}", status_code=status.HTTP_202_ACCEPTED)
@@ -711,6 +743,15 @@ def create_app(
                 "Opus mono 16 kHz.",
             )
 
+        cues = b""
+        if job["model"] == DIARIZE_MODEL:
+            encoded = request.headers.get("X-Transcript-Voicing", "")
+            if len(encoded) > 4000:
+                raise HTTPException(400, "Indices vocaux trop longs.")
+            try:
+                cues = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise HTTPException(400, "Indices vocaux illisibles.") from exc
         if not db.claim_chunk_upload(job_id, index):
             return {"accepted": False, "index": index, "bytes": 0}
         path = config.chunk_dir / f"job{job_id}_chunk{index}{CHUNK_SUFFIX}"
@@ -725,7 +766,7 @@ def create_app(
 
         # 202 tout de suite : Cloudflare coupe vers 100 s, la
         # transcription dure souvent plus longtemps.
-        task = asyncio.create_task(_run_chunk(job, window, path))
+        task = asyncio.create_task(_run_chunk(job, window, path, cues))
         app.state.tasks.add(task)
         task.add_done_callback(app.state.tasks.discard)
         return {"accepted": True, "index": index, "bytes": len(body)}
@@ -752,7 +793,7 @@ def create_app(
             "status": job["status"],
             "error": job["error_message"],
             "filename": job["filename"],
-            "audio": AUDIO_PROFILE,
+            "audio": audio_profile(job["model"]),
             "model": job["model"],
             "title": job["title"],
             "cost_usd": job["cloud_cost_usd"],
@@ -1678,22 +1719,32 @@ def create_app(
             db.update_job_context_json(job_id, contexte)
 
         try:
-            enrichi, usage = enrich_transcript_via_gemini(
-                keys.get(),
-                MODELE_ENRICHISSEMENT,
-                transcript,
+            options = dict(
                 language=str(job["language"] or "fr"),
                 glossary_terms=list(contexte.get("glossary_terms") or []),
                 expected_speaker_names=list(contexte.get("expected_speaker_names") or []),
                 meeting_context=str(contexte.get("meeting_context") or ""),
                 odoo_context=str(contexte.get("odoo_context") or ""),
             )
+            if job["model"] == DIARIZE_MODEL or config.openai_context:
+                client = OpenAITextClient(openai_keys.get())
+                enrichi, usage = client.structured(
+                    "Analyse les données de réunion et produis les métadonnées demandées.",
+                    build_enrich_prompt(transcript, **options), ENRICH_SCHEMA,
+                )
+                enrichi["speakers"] = {s["label"]: s["name"] for s in enrichi["speakers"]}
+                enrichi["uncertain_passages"] = enrichi.pop("uncertain")
+                provider = "openai"
+            else:
+                enrichi, usage = enrich_transcript_via_gemini(
+                    keys.get(), MODELE_ENRICHISSEMENT, transcript, **options)
+                provider = "gemini"
         except (CloudTranscriptionError, SecretError) as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
         db.add_api_usage(
             job_id=job_id,
-            provider=provider_for_model(MODELE_ENRICHISSEMENT),
+            provider=provider,
             model=usage.model or MODELE_ENRICHISSEMENT,
             step="reenrichissement",
             input_tokens=usage.input_tokens,
@@ -1811,7 +1862,8 @@ def create_app(
         chemin.write_bytes(corps)
         try:
             indices = await asyncio.to_thread(
-                identifier, str(chemin), api_key=keys.get()
+                identifier, str(chemin), api_key=context_keys.get(),
+                **({"model_id": TEXT_MODEL} if config.openai_context else {})
             )
         except (CloudTranscriptionError, SecretError) as exc:
             log.warning("sonde en échec : %s", exc)
@@ -1821,7 +1873,7 @@ def create_app(
 
         db.add_api_usage(
             job_id=None,
-            provider=fournisseur(),
+            provider=context_provider,
             model=indices.usage.model,
             step="sonde_identification",
             input_tokens=indices.usage.input_tokens,
@@ -1835,8 +1887,8 @@ def create_app(
         enquete = await asyncio.to_thread(_enqueter, owner_id, indices, moment)
         db.add_api_usage(
             job_id=None,
-            provider=fournisseur(MODELE_ENQUETE),
-            model=enquete.usage.model or MODELE_ENQUETE,
+            provider=context_provider,
+            model=enquete.usage.model or investigation_model,
             step="sonde_enquete",
             input_tokens=enquete.usage.input_tokens,
             output_tokens=enquete.usage.output_tokens,
@@ -1892,8 +1944,8 @@ def create_app(
         )
         db.add_api_usage(
             job_id=None,
-            provider=fournisseur(MODELE_ENQUETE),
-            model=enquete.usage.model or MODELE_ENQUETE,
+            provider=context_provider,
+            model=enquete.usage.model or investigation_model,
             step="sonde_enquete_guidee",
             input_tokens=enquete.usage.input_tokens,
             output_tokens=enquete.usage.output_tokens,
@@ -1958,7 +2010,8 @@ def create_app(
                 agenda=lambda: passerelle.meetings(
                     near=_instant(moment), window_hours=3.0
                 ),
-                api_key=keys.get(),
+                api_key=context_keys.get(),
+                **({"model_id": TEXT_MODEL} if config.openai_context else {}),
                 **({"echanges": echanges, "ecartes": ecartes} if guidee else {}),
             )
         except (CloudTranscriptionError, SecretError) as exc:
@@ -2090,10 +2143,10 @@ def create_app(
                 {
                     "id": entry["id"],
                     "label": entry.get("label") or entry["id"],
-                    "default": bool(entry.get("default")),
+                    "default": entry["id"] == default_model,
                 }
                 for entry in CLOUD_TRANSCRIPTION_MODELS
-                if provider_for_model(entry["id"]) == "gemini"
+                if entry["id"] in offered_models
             ],
             "corbeille": {"retention_jours": config.corbeille_jours},
             "video": {"disponible": stockage_disponible()},
@@ -2118,7 +2171,7 @@ def create_app(
         courant = db.get_job(job_id) or {}
         return courant.get("status") == "cancelled" or bool(courant.get("deleted_at"))
 
-    async def _run_chunk(job: dict, window: dict, path: Path) -> None:
+    async def _run_chunk(job: dict, window: dict, path: Path, cues: bytes) -> None:
         job_id = int(job["id"])
         index = int(window["idx"])
         async with app.state.semaphore:
@@ -2129,7 +2182,7 @@ def create_app(
                 return
             db.mark_chunk_started(job_id, index)
             try:
-                result = await asyncio.to_thread(_transcribe_blocking, job, window, path)
+                result = await asyncio.to_thread(_transcribe_blocking, job, window, path, cues)
             except (CloudTranscriptionError, SecretError) as exc:
                 log.warning("job %s fenêtre %s en échec : %s", job_id, index, exc)
                 db.set_chunk_status(job_id, index, "erreur", error=str(exc))
@@ -2144,15 +2197,16 @@ def create_app(
                 _discard(path)
 
             db.set_chunk_status(job_id, index, "termine", error=None, result=result.to_dict())
-            db.add_api_usage(
-                job_id=job_id,
-                provider=provider_for_model(str(job["model"])),
-                model=str(job["model"]),
-                step="cloud_transcription",
-                input_tokens=result.usage.input_tokens,
-                output_tokens=result.usage.output_tokens,
-                cost_usd=result.usage.cost_usd,
-            )
+            if job["model"] != DIARIZE_MODEL:
+                db.add_api_usage(
+                    job_id=job_id,
+                    provider=provider_for_model(str(job["model"])),
+                    model=str(job["model"]),
+                    step="cloud_transcription",
+                    input_tokens=result.usage.input_tokens,
+                    output_tokens=result.usage.output_tokens,
+                    cost_usd=result.usage.cost_usd,
+                )
             if interrompue(job_id):
                 return
             remaining = [
@@ -2167,7 +2221,7 @@ def create_app(
                     log.exception("job %s : finalisation automatique en échec", job_id)
                     db.set_job_status(job_id, "a_finaliser")
 
-    def _transcribe_blocking(job: dict, window: dict, path: Path) -> CloudChunkResult:
+    def _transcribe_blocking(job: dict, window: dict, path: Path, cues: bytes) -> CloudChunkResult:
         context = context_for_chunk(
             chunk_index=int(window["idx"]),
             chunk_count=int(job["chunk_count"]),
@@ -2176,6 +2230,45 @@ def create_app(
             language=str(job["language"]),
             context=json.loads(job["context_json"] or "{}"),
         )
+        if job["model"] == DIARIZE_MODEL:
+            key = openai_keys.get()
+            with path.open("rb") as audio:
+                digest = hashlib.file_digest(audio, "sha256").hexdigest()
+            cached = json.loads(window["result_json"] or "{}")
+            if cached.get("audio_sha256") != digest:
+                cached = {"audio_sha256": digest}
+
+            def save(stage, result, usage):
+                cached[stage] = result.to_dict()
+                db.save_openai_stage(job["id"], window["idx"], stage, cached, usage)
+
+            def acoustic(model_id):
+                if model_id in cached:
+                    return CloudChunkResult.from_dict(cached[model_id])
+                result = transcribe_chunk(str(path), model_id=model_id, context=context, api_key=key)
+                save(model_id, result, result.usage)
+                return result
+
+            if "review" in cached:
+                return CloudChunkResult.from_dict(cached["review"])
+            raw = acoustic(DIARIZE_MODEL)
+            second = acoustic(CONTEXT_AUDIO_MODEL)
+            if "whisper-1" in cached:
+                timed = CloudChunkResult.from_dict(cached["whisper-1"])
+            else:
+                timed = OpenAITranscribeProvider(key).timed_reading(str(path), context)
+                save("whisper-1", timed, timed.usage)
+            try:
+                result, usage = review_window(OpenAITextClient(key), raw, second, context,
+                                              timed=timed, cues=cues)
+            except IncompleteReview as exc:
+                db.add_api_usage(job_id=job["id"], provider="openai", step="review_incomplete",
+                                 **exc.usage.to_dict())
+                raise
+            save("review", result, usage)
+            return result
+        if provider_for_model(job["model"]) != "gemini":
+            raise CloudTranscriptionError("Fournisseur non configuré pour ce traitement.")
         return transcribe_chunk(
             str(path),
             model_id=str(job["model"]),

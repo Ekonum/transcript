@@ -19,8 +19,6 @@ import {
 } from '../fileQueue.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
-const MODELE = 'gemini-3.8-flash';
-
 /** Assistant de lancement.
  *
  *  L'intention : rendre lisible et rassurant un traitement long. D'où
@@ -680,7 +678,6 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                 // Seule la partie retenue est transcrite — donc payée.
                 duree: (fin || secondes) - debut,
                 offset: debut,
-                modele: MODELE,
                 contexte: {
                   audio_parts: clipAudioParts(fichier.audioParts, debut, fin || secondes),
                   client_company: client.trim(),

@@ -293,6 +293,9 @@ CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
         "diarizes": True,
         # OpenAI transcription endpoint model id sent as-is.
         "api_model": "gpt-4o-transcribe-diarize",
+        # The service rejects audio over 1,400 s. Our planner allows 5 min
+        # of tolerance, so the largest single request is 23 minutes.
+        "max_chunk_minutes": 18,
     },
     {
         # Released 2026-07-28. OpenAI recommends this model for
@@ -2062,6 +2065,49 @@ class OpenAITranscribeProvider(CloudProvider):
         self._json("GET", f"{OPENAI_API_BASE}/v1/models", headers=self._auth())
         return {"ok": True, "models": self._catalogue_models()}
 
+    def _post_audio(self, audio_path: str, fields: dict[str, str | list[str]]) -> dict:
+        from pathlib import Path as _Path
+
+        body_bytes = _Path(audio_path).read_bytes()
+        multipart, content_type = _multipart_body(
+            fields,
+            file_field="file",
+            filename=_Path(audio_path).name,
+            file_bytes=body_bytes,
+            file_content_type=_audio_mime(audio_path),
+        )
+        raw, _ = self._request(
+            "POST",
+            f"{OPENAI_API_BASE}/v1/audio/transcriptions",
+            data=multipart,
+            headers={**self._auth(), "Content-Type": content_type},
+        )
+        try:
+            return json.loads(raw.decode("utf-8", errors="replace") or "{}")
+        except json.JSONDecodeError as exc:
+            raise CloudTranscriptionError(
+                f"Réponse OpenAI illisible : {exc}"
+            ) from exc
+
+    def timed_reading(self, audio_path: str, context: CloudPromptContext) -> CloudChunkResult:
+        """Independent word-level acoustic anchors, also for quiet or overlapping replies."""
+        fields = {"model": "whisper-1", "response_format": "verbose_json",
+                  "timestamp_granularities": ["word"]}
+        terms = context.bias_terms(limit=50)
+        if terms:
+            fields["prompt"] = ", ".join(terms)
+        languages = self._language_hints(context)
+        if languages:
+            fields["language"] = languages[0]
+        payload = self._post_audio(audio_path, fields)
+        words = [{"start": round(float(w["start"]) + context.chunk_offset_seconds, 3),
+                  "end": round(float(w["end"]) + context.chunk_offset_seconds, 3),
+                  "text": str(w["word"]).strip()} for w in payload.get("words", [])]
+        if not words:
+            raise CloudTranscriptionError("La relecture horodatée OpenAI est vide.")
+        return CloudChunkResult(segments=words, usage=CloudUsage(
+            model="whisper-1", cost_usd=round(context.chunk_duration_seconds * .006 / 60, 6)))
+
     @staticmethod
     def _context_prompt(context: CloudPromptContext) -> str:
         parts: list[str] = []
@@ -2103,8 +2149,6 @@ class OpenAITranscribeProvider(CloudProvider):
     def transcribe(
         self, audio_path: str, *, model_id: str, context: CloudPromptContext
     ) -> CloudChunkResult:
-        from pathlib import Path as _Path
-
         entry = cloud_model_entry(model_id)
         api_model = str(entry.get("api_model") or model_id)
         prompt_terms = ", ".join(context.bias_terms(limit=100))
@@ -2116,8 +2160,8 @@ class OpenAITranscribeProvider(CloudProvider):
         language_hints = self._language_hints(context)
         if modern_context and language_hints:
             fields["languages"] = language_hints
-        elif (context.language or "").strip():
-            fields["language"] = context.language
+        elif language_hints:
+            fields["language"] = language_hints[0]
         # The transcription ``prompt`` biases decoding toward our
         # vocabulary, participants and the meeting topic.
         prompt_parts: list[str] = []
@@ -2126,32 +2170,15 @@ class OpenAITranscribeProvider(CloudProvider):
         structured_prompt = self._context_prompt(context)
         if structured_prompt:
             prompt_parts.append(structured_prompt)
-        if prompt_parts:
+        if entry.get("diarizes"):
+            fields.update(response_format="diarized_json", chunking_strategy="auto")
+        elif prompt_parts:
             fields["prompt"] = " ".join(prompt_parts)
         if modern_context:
             keywords = self._keyword_hints(context)
             if keywords:
                 fields["keywords"] = keywords
-        body_bytes = _Path(audio_path).read_bytes()
-        multipart, content_type = _multipart_body(
-            fields,
-            file_field="file",
-            filename=_Path(audio_path).name,
-            file_bytes=body_bytes,
-            file_content_type=_audio_mime(audio_path),
-        )
-        raw, _ = self._request(
-            "POST",
-            f"{OPENAI_API_BASE}/v1/audio/transcriptions",
-            data=multipart,
-            headers={**self._auth(), "Content-Type": content_type},
-        )
-        try:
-            payload = json.loads(raw.decode("utf-8", errors="replace") or "{}")
-        except json.JSONDecodeError as exc:
-            raise CloudTranscriptionError(
-                f"Réponse OpenAI illisible : {exc}"
-            ) from exc
+        payload = self._post_audio(audio_path, fields)
         # gpt-4o-transcribe-diarize returns per-speaker segments; the
         # plain/mini models return flat text. Handle both, plus the
         # legacy verbose_json "segments" shape, defensively.
@@ -2168,6 +2195,10 @@ class OpenAITranscribeProvider(CloudProvider):
                     "text": seg.get("text") or seg.get("transcript") or "",
                 }
             )
+        if entry.get("diarizes") and (
+            not utterances or any(not u["speaker"] for u in utterances)
+        ):
+            raise CloudTranscriptionError("OpenAI a répondu sans diarisation exploitable.")
         if not utterances:
             text = str(payload.get("text") or "")
             utterances = _segments_from_plain_text(text, context.chunk_duration_seconds)
