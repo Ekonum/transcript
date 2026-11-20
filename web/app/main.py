@@ -216,6 +216,10 @@ class TokenRequest(BaseModel):
     name: str = Field(default="", max_length=120)
 
 
+class TranscriptionSetting(BaseModel):
+    provider: Literal["gemini", "openai"]
+
+
 class VocabularyRecord(BaseModel):
     terms: list[str] = Field(default_factory=list)
 
@@ -341,14 +345,17 @@ def create_app(
         url=config.broker_url, auth=broker_auth, item=config.openai_item,
         field="Clé API", static_key=config.dev_openai_key,
     )
-    default_model = DIARIZE_MODEL if config.openai_transcription else DEFAULT_CLOUD_MODEL
-    offered_models = {entry["id"] for entry in CLOUD_TRANSCRIPTION_MODELS
-                      if entry.get("provider") == "gemini"}
-    if config.openai_transcription:
-        offered_models.add(DIARIZE_MODEL)
-    context_keys = openai_keys if config.openai_context else keys
-    context_provider = "openai" if config.openai_context else "gemini"
-    investigation_model = TEXT_MODEL if config.openai_context else MODELE_ENQUETE
+    gemini_models = {entry["id"] for entry in CLOUD_TRANSCRIPTION_MODELS
+                     if entry.get("provider") == "gemini"}
+
+    def engine_selection() -> tuple[str, bool]:
+        selected = db.transcription_provider()
+        openai_transcription = selected == "openai" if selected else config.openai_transcription
+        openai_context = selected == "openai" if selected else config.openai_context
+        return (DIARIZE_MODEL if openai_transcription else DEFAULT_CLOUD_MODEL), openai_context
+
+    def models_for(default_model: str) -> set[str]:
+        return gemini_models | {DIARIZE_MODEL} if default_model == DIARIZE_MODEL else gemini_models
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
     if config.auth_mode not in {"access-jwt", "keycloak-jwt"}:
         raise RuntimeError("Mode d'authentification inconnu.")
@@ -519,6 +526,26 @@ def create_app(
                                 "La gestion des jetons demande une connexion personnelle.")
         return owner
 
+    def can_configure_transcription(request: Request, owner_id: int) -> bool:
+        if not config.transcription_admins:
+            return False
+        source = request.state.identity_source
+        if source == "access-jwt":
+            account = f"access:{db.email_for_user(owner_id).strip().lower()}"
+        elif source in {"keycloak-session", "keycloak-jwt"}:
+            subject = db.keycloak_subject_for_user(owner_id, config.keycloak_issuer)
+            if not subject:
+                return False
+            account = f"keycloak:{subject}"
+        else:
+            return False
+        return account in config.transcription_admins
+
+    def transcription_admin(request: Request, owner_id: int = Depends(current_user)) -> int:
+        if not can_configure_transcription(request, owner_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Ce réglage est réservé aux administrateurs.")
+        return owner_id
+
     def owned_job(job_id: int, owner_id: int) -> dict[str, Any]:
         job = db.get_job(job_id)
         if job is None or int(job["owner_id"]) != owner_id:
@@ -549,7 +576,9 @@ def create_app(
         except Exception as exc:  # noqa: BLE001 — on rapporte, on ne lève pas
             problemes.append(f"base : {exc}")
         try:
-            for provider_keys in {openai_keys if config.openai_transcription else keys, context_keys}:
+            default_model, openai_context = engine_selection()
+            for provider_keys in {openai_keys if default_model == DIARIZE_MODEL else keys,
+                                  openai_keys if openai_context else keys}:
                 if not provider_keys.get():
                     problemes.append("broker : clé de transcription vide")
         except SecretError as exc:
@@ -629,8 +658,9 @@ def create_app(
         # — l'app macOS laisse saisir un modèle tout juste sorti — en le
         # facturant au tarif le plus cher. Ici le modèle vient d'une liste
         # fermée : une coquille doit être refusée, pas facturée au prix fort.
+        default_model, _ = engine_selection()
         model = canonical_cloud_model_id(payload.model or default_model)
-        if model not in offered_models:
+        if model not in models_for(default_model):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 f"Modèle inconnu : {payload.model!r}.",
@@ -1557,10 +1587,29 @@ def create_app(
         """
         return {
             **db.user_profile(owner_id),
+            "can_configure_transcription": can_configure_transcription(request, owner_id),
             "via": {"api-token": "jeton d'API", "keycloak-jwt": "Keycloak",
                     "keycloak-session": "portail"}
                 .get(request.state.identity_source, "Cloudflare Access"),
         }
+
+    @app.get("/api/admin/transcription")
+    def transcription_setting(_: int = Depends(transcription_admin)) -> dict:
+        default_model, _ = engine_selection()
+        return {"provider": provider_for_model(default_model)}
+
+    @app.put("/api/admin/transcription")
+    def update_transcription_setting(
+        payload: TranscriptionSetting, owner_id: int = Depends(transcription_admin),
+    ) -> dict:
+        provider_keys = openai_keys if payload.provider == "openai" else keys
+        try:
+            if not provider_keys.get():
+                raise SecretError("Clé vide.")
+        except SecretError as exc:
+            raise HTTPException(503, "La clé de ce moteur est indisponible dans le coffre.") from exc
+        db.set_transcription_provider(payload.provider, owner_id)
+        return {"provider": payload.provider}
 
     @app.get("/api/me/stats")
     def my_stats(
@@ -1726,7 +1775,8 @@ def create_app(
                 meeting_context=str(contexte.get("meeting_context") or ""),
                 odoo_context=str(contexte.get("odoo_context") or ""),
             )
-            if job["model"] == DIARIZE_MODEL or config.openai_context:
+            _, openai_context = engine_selection()
+            if job["model"] == DIARIZE_MODEL or openai_context:
                 client = OpenAITextClient(openai_keys.get())
                 enrichi, usage = client.structured(
                     "Analyse les données de réunion et produis les métadonnées demandées.",
@@ -1859,11 +1909,15 @@ def create_app(
             )
 
         chemin = config.chunk_dir / f"sonde{owner_id}_{int(time.time()*1000)}{CHUNK_SUFFIX}"
+        _, openai_context = engine_selection()
+        context_keys = openai_keys if openai_context else keys
+        context_provider = "openai" if openai_context else "gemini"
+        investigation_model = TEXT_MODEL if openai_context else MODELE_ENQUETE
         chemin.write_bytes(corps)
         try:
             indices = await asyncio.to_thread(
                 identifier, str(chemin), api_key=context_keys.get(),
-                **({"model_id": TEXT_MODEL} if config.openai_context else {})
+                **({"model_id": TEXT_MODEL} if openai_context else {})
             )
         except (CloudTranscriptionError, SecretError) as exc:
             log.warning("sonde en échec : %s", exc)
@@ -1884,7 +1938,7 @@ def create_app(
         # L'enquête coûte du jugement, pas de l'audio : on la mène dans
         # un fil pour ne pas bloquer la boucle d'événements pendant ses
         # allers-retours avec Odoo.
-        enquete = await asyncio.to_thread(_enqueter, owner_id, indices, moment)
+        enquete = await asyncio.to_thread(_enqueter, owner_id, indices, moment, openai_context=openai_context)
         db.add_api_usage(
             job_id=None,
             provider=context_provider,
@@ -1933,12 +1987,16 @@ def create_app(
         """
         if demande.messages[-1].role != "user":
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rien à quoi répondre.")
+        _, openai_context = engine_selection()
+        context_provider = "openai" if openai_context else "gemini"
+        investigation_model = TEXT_MODEL if openai_context else MODELE_ENQUETE
         rejected = [r.model_dump() for r in demande.rejected]
         enquete = await asyncio.to_thread(
             _enqueter,
             owner_id,
             demande.clues,
             demande.moment,
+            openai_context=openai_context,
             echanges=[m.model_dump() for m in demande.messages],
             ecartes=rejected,
         )
@@ -1982,6 +2040,7 @@ def create_app(
         indices,
         moment: str = "",
         *,
+        openai_context: bool,
         echanges: list[dict] | None = None,
         ecartes: list[dict] | None = None,
     ) -> Conclusion:
@@ -2010,8 +2069,8 @@ def create_app(
                 agenda=lambda: passerelle.meetings(
                     near=_instant(moment), window_hours=3.0
                 ),
-                api_key=context_keys.get(),
-                **({"model_id": TEXT_MODEL} if config.openai_context else {}),
+                api_key=(openai_keys if openai_context else keys).get(),
+                **({"model_id": TEXT_MODEL} if openai_context else {}),
                 **({"echanges": echanges, "ecartes": ecartes} if guidee else {}),
             )
         except (CloudTranscriptionError, SecretError) as exc:
@@ -2138,6 +2197,8 @@ def create_app(
         où en est le budget d'équipe — la clé Gemini étant partagée, le
         plafond l'est aussi."""
         spent = db.month_spend_usd()
+        default_model, _ = engine_selection()
+        offered_models = models_for(default_model)
         return {
             "models": [
                 {

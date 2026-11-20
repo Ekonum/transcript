@@ -263,6 +263,7 @@ bout sans humain. Même origine, derrière Access comme le reste.
 | `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « transcript - API Google Gemini » / « Clé API ») |
 | `EKOVIDEO_OPENAI_CONTEXT` | À `1`, la sonde, la recherche guidée de dossier et la relecture manuelle passent par OpenAI. Défaut `0`. |
 | `EKOVIDEO_OPENAI_TRANSCRIPTION` | À `1`, le navigateur utilise le parcours OpenAI pour les nouveaux traitements. Défaut `0` (Gemini). |
+| `EKOVIDEO_TRANSCRIPTION_ADMINS` | Comptes qui peuvent choisir le moteur dans « Mon compte ». Liste séparée par des virgules, vide par défaut. Format `access:adresse-verifiee` (adresse en minuscules) ou `keycloak:sub` (identifiant du compte dans l’issuer configuré). |
 | `EKONUM_OPENAI_ITEM` | Élément du coffre contenant la clé du projet Transcript. Défaut « Ekonum - OpenAI Platform Transcript key », champ « Clé API ». |
 | `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 32, soit ~30 €) |
 | `EKOVIDEO_ODOO_URL` / `_DB` / `_LOGIN` | Odoo — facultatif ; absent, l'enrichissement se tait |
@@ -275,7 +276,14 @@ Le serveur conserve les horodatages acoustiques, croise les deux transcriptions 
 
 Pour comparer sur un verbatim indépendant vérifié à l’écoute, exporter chaque résultat en JSON avec une liste `segments` contenant `speaker` et `text`. Lancer `python -m transcription_eval.compare --reference reference.json --gemini gemini.json --openai openai.json --term Odoo`. Contrôler aussi à l’écoute les adresses exactes, montants, négations, noms et tours de parole courts. Une différence avec une transcription Gemini seule mesure un désaccord entre moteurs. La décision de bascule dépend de la fidélité à l’audio.
 
-Pour revenir à Gemini pour les nouvelles réunions, remettre les deux options à `0` puis recréer le conteneur. Les réunions déjà enregistrées conservent leur modèle et leur transcription.
+Dans « Mon compte », un administrateur peut choisir Gemini ou OpenAI pour les
+nouvelles transcriptions et recherches de contexte de l'équipe. Cette
+préférence est conservée en base et prend le pas sur les deux options
+d'environnement. Ces deux options restent valables tant qu'aucun choix n'a
+été enregistré. Le serveur vérifie que la clé du moteur est accessible au
+coffre avant d'enregistrer le choix. L'état des quotas dépend du fournisseur.
+Pour revenir à Gemini, sélectionner Gemini dans le même réglage. Les
+transcriptions déjà enregistrées ou en cours conservent leur modèle.
 
 ## Authentification
 

@@ -126,6 +126,7 @@ class Settings:
     openai_context: bool = False
     openai_item: str = "Ekonum - OpenAI Platform Transcript key"
     dev_openai_key: str = ""
+    transcription_admins: frozenset[str] = frozenset()
     auth_mode: str = "access-jwt"
     keycloak_issuer: str = ""
     keycloak_audience: str = ""
@@ -151,6 +152,10 @@ class Settings:
             openai_context=_flag("EKOVIDEO_OPENAI_CONTEXT"),
             openai_item=os.environ.get("EKONUM_OPENAI_ITEM", "Ekonum - OpenAI Platform Transcript key").strip(),
             dev_openai_key=os.environ.get("OPENAI_API_KEY", "").strip() if dev else "",
+            transcription_admins=frozenset(
+                account.strip() for account in os.environ.get("EKOVIDEO_TRANSCRIPTION_ADMINS", "").split(",")
+                if account.strip()
+            ),
             auth_mode=os.environ.get("EKOVIDEO_AUTH_MODE", "access-jwt").strip(),
             keycloak_issuer=os.environ.get("EKOVIDEO_KEYCLOAK_ISSUER", "").strip(),
             keycloak_audience=os.environ.get("EKOVIDEO_KEYCLOAK_AUDIENCE", "").strip(),

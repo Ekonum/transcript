@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS transcription_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL CHECK (provider IN ('gemini', 'openai')),
+    updated_by INTEGER NOT NULL REFERENCES users(id),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Ajout compatible avec les comptes et owner_id historiques.
 CREATE TABLE IF NOT EXISTS user_keycloak_identities (
     user_id        INTEGER PRIMARY KEY REFERENCES users(id),
@@ -444,6 +451,28 @@ class Database:
                 "WHERE u.id = ?", (owner_id,),
             ).fetchone()
             return dict(row) if row else {"email": "", "storage_owner": ""}
+
+    def keycloak_subject_for_user(self, owner_id: int, issuer: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT subject FROM user_keycloak_identities WHERE user_id = ? AND issuer = ?",
+                (owner_id, issuer),
+            ).fetchone()
+            return row["subject"] if row else None
+
+    def transcription_provider(self) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT provider FROM transcription_settings WHERE id = 1").fetchone()
+            return row["provider"] if row else None
+
+    def set_transcription_provider(self, provider: str, owner_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO transcription_settings (id, provider, updated_by) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, "
+                "updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP",
+                (provider, owner_id),
+            )
 
     def email_for_user(self, owner_id: int) -> str:
         with self.connect() as conn:
