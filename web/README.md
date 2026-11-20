@@ -260,8 +260,8 @@ bout sans humain. Même origine, derrière Access comme le reste.
 | `EKONUM_CLIENT_ID` / `EKONUM_TOKEN_URL` | Client et adresse d'échange (défauts `transcript` et le royaume `ekonum` d'identite.ekonum.fr) |
 | `EKONUM_TOKEN` | Ancien jeton statique du broker, utilisé tant que `EKONUM_CLIENT_SECRET` est absent |
 | `EKONUM_BROKER` | URL de base du broker (convention du parc ; `EKONUM_BROKER_URL` surcharge l'URL complète) |
-| `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « Ekonum - API Google Gemini » / « Clé API ») |
-| `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 50) |
+| `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « transcript - API Google Gemini » / « Clé API ») |
+| `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 32, soit ~30 €) |
 | `EKOVIDEO_ODOO_URL` / `_DB` / `_LOGIN` | Odoo — facultatif ; absent, l'enrichissement se tait |
 
 ## Authentification

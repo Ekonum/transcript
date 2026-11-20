@@ -36,11 +36,11 @@ services:
       EKONUM_CLIENT_SECRET: "${EKONUM_CLIENT_SECRET:-}"
       EKONUM_TOKEN: "${EKONUM_TOKEN:-}"
       EKONUM_BROKER: "http://ekonum-secret-broker:8710"
-      EKONUM_BROKER_ITEM: "Ekonum - API Google Gemini"
+      EKONUM_BROKER_ITEM: "transcript - API Google Gemini"
       EKONUM_BROKER_FIELD: "Clé API"
 
-      # Plafond mensuel d'équipe — la clé étant partagée, le budget l'est.
-      EKOVIDEO_MONTHLY_BUDGET_USD: "50"
+      # Plafond mensuel d'équipe (~30 €).
+      EKOVIDEO_MONTHLY_BUDGET_USD: "32"
 
       # Odoo. **Tout passe par la clé personnelle de chacun**, lecture
       # comprise : une recherche faite sous un compte commun ignorerait

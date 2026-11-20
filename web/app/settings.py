@@ -160,17 +160,16 @@ class Settings:
                 "https://identite.ekonum.fr/realms/ekonum/protocol/openid-connect/token",
             ).strip(),
             broker_item=os.environ.get(
-                # Le nom exact dans le coffre — vérifié avec « ekonum-secret
-                # list ». « Ekonum - API Gemini » n'existe pas, et le broker
-                # aurait répondu sans valeur exploitable.
-                "EKONUM_BROKER_ITEM", "Ekonum - API Google Gemini"
+                # Clé dédiée à l'application dans Applications/transcript,
+                # vérifiée dans le coffre avec « ekonum-secret list ».
+                "EKONUM_BROKER_ITEM", "transcript - API Google Gemini"
             ),
             broker_field=os.environ.get("EKONUM_BROKER_FIELD", "Clé API"),
             odoo_url=os.environ.get("EKOVIDEO_ODOO_URL", "").strip(),
             odoo_database=os.environ.get("EKOVIDEO_ODOO_DB", "").strip(),
             odoo_login=os.environ.get("EKOVIDEO_ODOO_LOGIN", "").strip(),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
-            monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
+            monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "32")),
             # projects/<numéro>/locations/global/workloadIdentityPools/<pool>/providers/<fournisseur>
             gcp_fournisseur=os.environ.get("EKOVIDEO_GCP_FOURNISSEUR", "").strip(),
             gcp_compte=os.environ.get("EKOVIDEO_GCP_COMPTE", "").strip(),
