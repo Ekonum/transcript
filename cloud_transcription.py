@@ -154,6 +154,29 @@ CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
         "thinking": "level_low",
     },
     {
+        # Released 2026-11-12. Generation 4, mid-range: $1.50/$7.50 per 1M
+        # in/out tokens (twice 3.8 Flash's introductory price, the same as
+        # its standard price from 2027-01-01). On the 20/11 bench (a full
+        # 8 min 45 meeting against a Gemini 4 Carbon draft), the light
+        # setting cut the word gap from 20.7 % to 16.7 % and kept the three
+        # speakers, at about four times Flash's cost. Offered as an admin
+        # choice, not the default: the reference is not yet checked by ear.
+        "id": "gemini-4-hydrogen",
+        "label": "Gemini 4 Hydrogen",
+        "family": "Gemini",
+        "role": _CLOUD_ROLE,
+        "kind": "cloud",
+        "provider": "gemini",
+        "tier": "heavy",
+        "language": ["multi"],
+        "billing": "per_token",
+        "price_in_per_1m": 1.50,
+        "price_out_per_1m": 7.50,
+        "needs_enrichment": False,
+        "diarizes": True,
+        "thinking": "level_low",
+    },
+    {
         # Released ~2026-08. Google's pitch: GA (not preview, unlike 3.6
         # at its own launch) — Pro-level agentic/coding capability at
         # Flash cost, better instruction-following than 3.6 Flash.
