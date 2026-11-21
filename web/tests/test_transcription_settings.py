@@ -97,3 +97,21 @@ class TranscriptionSettingsTest(TestCase):
             self.assertEqual(client.get(self.route).status_code, 200)
             client.cookies.set(SESSION_COOKIE, db.open_web_session(other, 1))
             self.assertEqual(client.get(self.route).status_code, 403)
+
+    def test_hydrogen_engine_transcribes_on_gemini_and_keeps_context_on_gemini(self):
+        with self.client() as client:
+            saved = client.put(self.route, headers=self.admin, json={"provider": "hydrogen"})
+            self.assertEqual(saved.json(), {"provider": "hydrogen"})
+            self.assertEqual(client.get(self.route, headers=self.admin).json(), {"provider": "hydrogen"})
+            job = client.post("/api/jobs", headers=self.member, json=self.job_payload).json()
+            self.assertEqual(job["model"], "gemini-4-hydrogen")
+            with patch("app.main.identifier", return_value=Indices()) as identify:
+                self.assertEqual(client.post("/api/probe", headers=self.member, content=b"audio").status_code, 200)
+                self.assertNotEqual(identify.call_args.kwargs.get("model_id"), TEXT_MODEL)
+
+    def test_hydrogen_is_priced_for_the_budget_guard(self):
+        from cloud_transcription import CLOUD_TRANSCRIPTION_MODELS
+        entry = next(e for e in CLOUD_TRANSCRIPTION_MODELS if e["id"] == "gemini-4-hydrogen")
+        self.assertEqual((entry["price_in_per_1m"], entry["price_out_per_1m"]), (1.50, 7.50))
+        self.assertFalse(entry.get("default"))
+        self.assertEqual(CLOUD_TRANSCRIPTION_MODELS[0]["id"], DEFAULT_CLOUD_MODEL)

@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS transcription_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    provider TEXT NOT NULL CHECK (provider IN ('gemini', 'openai')),
+    provider TEXT NOT NULL CHECK (provider IN ('gemini', 'hydrogen', 'openai')),
     updated_by INTEGER NOT NULL REFERENCES users(id),
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -143,7 +143,8 @@ function TranscriptionSettings() {
             aria-describedby="transcription-setting-help"
             onChange={(event) => { setProvider(event.target.value); setMessage(''); }}>
             {!saved ? <option value="">—</option> : null}
-            <option value="gemini">Gemini</option>
+            <option value="gemini">Gemini 3.8 Flash</option>
+            <option value="hydrogen">Gemini 4 Hydrogen — plus fidèle, environ 4 fois plus cher</option>
             <option value="openai">OpenAI</option>
           </select>
         </label>

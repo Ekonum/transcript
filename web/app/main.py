@@ -52,6 +52,8 @@ from cloud_transcription import (
     provider_for_model,
 )
 
+HYDROGEN_MODEL = "gemini-4-hydrogen"
+
 from .audio_parts import audio_parts
 from . import avancement
 from .auth import AccessVerifier, AuthError, KeycloakVerifier
@@ -217,7 +219,7 @@ class TokenRequest(BaseModel):
 
 
 class TranscriptionSetting(BaseModel):
-    provider: Literal["gemini", "openai"]
+    provider: Literal["gemini", "hydrogen", "openai"]
 
 
 class VocabularyRecord(BaseModel):
@@ -348,11 +350,18 @@ def create_app(
     gemini_models = {entry["id"] for entry in CLOUD_TRANSCRIPTION_MODELS
                      if entry.get("provider") == "gemini"}
 
+    # The engines an administrator can choose. Context search follows OpenAI
+    # only for the OpenAI engine; both Gemini engines keep it on Gemini.
+    engines = {"gemini": DEFAULT_CLOUD_MODEL, "hydrogen": HYDROGEN_MODEL,
+               "openai": DIARIZE_MODEL}
+
     def engine_selection() -> tuple[str, bool]:
         selected = db.transcription_provider()
-        openai_transcription = selected == "openai" if selected else config.openai_transcription
-        openai_context = selected == "openai" if selected else config.openai_context
-        return (DIARIZE_MODEL if openai_transcription else DEFAULT_CLOUD_MODEL), openai_context
+        if selected in engines:
+            return engines[selected], selected == "openai"
+        openai_transcription = config.openai_transcription
+        return ((DIARIZE_MODEL if openai_transcription else DEFAULT_CLOUD_MODEL),
+                config.openai_context)
 
     def models_for(default_model: str) -> set[str]:
         return gemini_models | {DIARIZE_MODEL} if default_model == DIARIZE_MODEL else gemini_models
@@ -1596,7 +1605,8 @@ def create_app(
     @app.get("/api/admin/transcription")
     def transcription_setting(_: int = Depends(transcription_admin)) -> dict:
         default_model, _ = engine_selection()
-        return {"provider": provider_for_model(default_model)}
+        engine = next((name for name, model in engines.items() if model == default_model), "gemini")
+        return {"provider": engine}
 
     @app.put("/api/admin/transcription")
     def update_transcription_setting(

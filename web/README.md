@@ -276,8 +276,11 @@ Le serveur conserve les horodatages acoustiques, croise les deux transcriptions 
 
 Pour comparer sur un verbatim indépendant vérifié à l’écoute, exporter chaque résultat en JSON avec une liste `segments` contenant `speaker` et `text`. Lancer `python -m transcription_eval.compare --reference reference.json --gemini gemini.json --openai openai.json --term Odoo`. Contrôler aussi à l’écoute les adresses exactes, montants, négations, noms et tours de parole courts. Une différence avec une transcription Gemini seule mesure un désaccord entre moteurs. La décision de bascule dépend de la fidélité à l’audio.
 
-Dans « Mon compte », un administrateur peut choisir Gemini ou OpenAI pour les
-nouvelles transcriptions et recherches de contexte de l'équipe. Cette
+Dans « Mon compte », un administrateur choisit le moteur des nouvelles
+transcriptions de l'équipe : Gemini 3.8 Flash, Gemini 4 Hydrogen (réflexion
+légère, plus fidèle sur le banc du 20/11, environ quatre fois plus cher
+aujourd'hui) ou OpenAI. Avec OpenAI, la recherche de contexte passe aussi chez
+OpenAI ; avec les deux moteurs Gemini, elle reste sur Gemini Flash. Cette
 préférence est conservée en base et prend le pas sur les deux options
 d'environnement. Ces deux options restent valables tant qu'aucun choix n'a
 été enregistré. Le serveur vérifie que la clé du moteur est accessible au
