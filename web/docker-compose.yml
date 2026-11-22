@@ -42,6 +42,7 @@ services:
       # Activate only after comparing representative recordings with Gemini.
       EKOVIDEO_OPENAI_TRANSCRIPTION: "${EKOVIDEO_OPENAI_TRANSCRIPTION:-0}"
       EKOVIDEO_OPENAI_CONTEXT: "${EKOVIDEO_OPENAI_CONTEXT:-0}"
+      EKOVIDEO_TRANSCRIPTION_ADMINS: "${EKOVIDEO_TRANSCRIPTION_ADMINS:-}"
       EKONUM_OPENAI_ITEM: "${EKONUM_OPENAI_ITEM:-Ekonum - OpenAI Platform Transcript key}"
 
       # Plafond mensuel d'équipe (~30 €).

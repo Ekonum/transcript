@@ -46,6 +46,8 @@ export function Compte() {
 
       <Dashboard />
 
+      {moi?.can_configure_transcription ? <TranscriptionSettings /> : null}
+
       <div className="verre mt-8 rounded-xl p-5">
         <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
         {odoo?.server ? (
@@ -99,6 +101,61 @@ export function Compte() {
         )}
       </div>
     </section>
+  );
+}
+
+function TranscriptionSettings() {
+  const [saved, setSaved] = useState('');
+  const [provider, setProvider] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    api.transcriptionSetting().then((setting) => {
+      setSaved(setting.provider);
+      setProvider(setting.provider);
+    }).catch((e) => setError(e.message));
+  }, []);
+
+  const save = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const setting = await api.setTranscriptionProvider(provider);
+      setSaved(setting.provider);
+      setMessage('Moteur enregistré.');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="verre mt-8 rounded-xl p-5" onSubmit={save}>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="ekn-label">
+          Moteur de transcription
+          <select className="ekn-input" value={provider} disabled={!saved || saving}
+            aria-describedby="transcription-setting-help"
+            onChange={(event) => { setProvider(event.target.value); setMessage(''); }}>
+            {!saved ? <option value="">—</option> : null}
+            <option value="gemini">Gemini 3.8 Flash</option>
+            <option value="hydrogen">Gemini 4 Hydrogen — plus fidèle, environ 4 fois plus cher</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </label>
+        <Bouton type="submit" disabled={!saved || saved === provider || saving}>Enregistrer</Bouton>
+      </div>
+      <p className="ekn-help mt-2" id="transcription-setting-help">
+        S’applique aux nouvelles transcriptions et recherches de contexte de l’équipe.
+      </p>
+      <Erreur>{error}</Erreur>
+      {message ? <p role="status" className="ekn-help mt-2">{message}</p> : null}
+    </form>
   );
 }
 
