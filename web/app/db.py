@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Other team-wide settings chosen by an administrator (key → value).
+CREATE TABLE IF NOT EXISTS team_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_by INTEGER NOT NULL REFERENCES users(id),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS transcription_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     provider TEXT NOT NULL CHECK (provider IN ('gemini', 'hydrogen', 'openai')),
@@ -459,6 +467,20 @@ class Database:
                 (owner_id, issuer),
             ).fetchone()
             return row["subject"] if row else None
+
+    def team_setting(self, key: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT value FROM team_settings WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_team_setting(self, key: str, value: str, owner_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO team_settings (key, value, updated_by) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP",
+                (key, value, owner_id),
+            )
 
     def transcription_provider(self) -> str | None:
         with self.connect() as conn:

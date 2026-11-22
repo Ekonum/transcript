@@ -124,6 +124,9 @@ class Settings:
     # Préparation 1888 : aucun changement de mode implicite à l'installation.
     openai_transcription: bool = False
     openai_context: bool = False
+    # Context search and text steps, until an administrator picks in « Mon
+    # compte ». OpenAI by default: free credits, no loss on reasoning tasks.
+    context_default: str = "openai"
     openai_item: str = "Ekonum - OpenAI Platform Transcript key"
     dev_openai_key: str = ""
     transcription_admins: frozenset[str] = frozenset()
@@ -150,6 +153,7 @@ class Settings:
             chunk_dir=Path(os.environ.get("EKOVIDEO_WEB_CHUNKS", state / "chunks")),
             openai_transcription=_flag("EKOVIDEO_OPENAI_TRANSCRIPTION"),
             openai_context=_flag("EKOVIDEO_OPENAI_CONTEXT"),
+            context_default=os.environ.get("EKOVIDEO_CONTEXT_PROVIDER", "openai").strip().lower(),
             openai_item=os.environ.get("EKONUM_OPENAI_ITEM", "Ekonum - OpenAI Platform Transcript key").strip(),
             dev_openai_key=os.environ.get("OPENAI_API_KEY", "").strip() if dev else "",
             transcription_admins=frozenset(

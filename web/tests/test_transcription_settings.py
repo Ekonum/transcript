@@ -58,8 +58,8 @@ class TranscriptionSettingsTest(TestCase):
         with self.client() as client:
             old_job = client.post("/api/jobs", headers=self.member, json=self.job_payload).json()
             self.assertEqual(old_job["model"], DEFAULT_CLOUD_MODEL)
-            self.assertEqual(client.put(self.route, headers=self.admin, json={"provider": "openai"}).json(),
-                             {"provider": "openai"})
+            self.assertEqual(client.put(self.route, headers=self.admin, json={"provider": "openai"}).json()["provider"],
+                             "openai")
             with patch("app.main.identifier", return_value=Indices()) as identify:
                 self.assertEqual(client.post("/api/probe", headers=self.member, content=b"audio").status_code, 200)
                 self.assertEqual(identify.call_args.kwargs["model_id"], TEXT_MODEL)
@@ -78,7 +78,7 @@ class TranscriptionSettingsTest(TestCase):
         broken_key = Mock(**{"get.side_effect": SecretError("indisponible")})
         with _Client(create_app(self.settings, verifier=self.verifier, openai_key=broken_key)) as client:
             self.assertEqual(client.put(self.route, headers=self.admin, json={"provider": "openai"}).status_code, 503)
-            self.assertEqual(client.get(self.route, headers=self.admin).json(), {"provider": "gemini"})
+            self.assertEqual(client.get(self.route, headers=self.admin).json()["provider"], "gemini")
 
     def test_portal_admin_stays_authorized_after_email_change(self):
         issuer = "https://identity.example.test/realms/test"
@@ -101,8 +101,8 @@ class TranscriptionSettingsTest(TestCase):
     def test_hydrogen_engine_transcribes_on_gemini_and_keeps_context_on_gemini(self):
         with self.client() as client:
             saved = client.put(self.route, headers=self.admin, json={"provider": "hydrogen"})
-            self.assertEqual(saved.json(), {"provider": "hydrogen"})
-            self.assertEqual(client.get(self.route, headers=self.admin).json(), {"provider": "hydrogen"})
+            self.assertEqual(saved.json()["provider"], "hydrogen")
+            self.assertEqual(client.get(self.route, headers=self.admin).json()["provider"], "hydrogen")
             job = client.post("/api/jobs", headers=self.member, json=self.job_payload).json()
             self.assertEqual(job["model"], "gemini-4-hydrogen")
             with patch("app.main.identifier", return_value=Indices()) as identify:
@@ -115,3 +115,23 @@ class TranscriptionSettingsTest(TestCase):
         self.assertEqual((entry["price_in_per_1m"], entry["price_out_per_1m"]), (1.50, 7.50))
         self.assertFalse(entry.get("default"))
         self.assertEqual(CLOUD_TRANSCRIPTION_MODELS[0]["id"], DEFAULT_CLOUD_MODEL)
+
+    def test_context_and_text_steps_can_run_on_openai_under_a_gemini_engine(self):
+        with self.client() as client:
+            saved = client.put(self.route, headers=self.admin,
+                               json={"provider": "hydrogen", "context_provider": "openai"}).json()
+            self.assertEqual(saved, {"provider": "hydrogen", "context_provider": "openai"})
+            job = client.post("/api/jobs", headers=self.member, json=self.job_payload).json()
+            self.assertEqual(job["model"], "gemini-4-hydrogen")
+            with patch("app.main.identifier", return_value=Indices()) as identify:
+                self.assertEqual(client.post("/api/probe", headers=self.member, content=b"audio").status_code, 200)
+                self.assertEqual(identify.call_args.kwargs["model_id"], TEXT_MODEL)
+            back = client.put(self.route, headers=self.admin,
+                              json={"provider": "hydrogen", "context_provider": "gemini"}).json()
+            self.assertEqual(back["context_provider"], "gemini")
+
+    def test_openai_is_the_default_for_context_outside_tests(self):
+        from dataclasses import replace
+        self.settings = replace(self.settings, context_default="openai")
+        with self.client() as client:
+            self.assertEqual(client.get(self.route, headers=self.admin).json()["context_provider"], "openai")

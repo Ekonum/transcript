@@ -107,6 +107,8 @@ export function Compte() {
 function TranscriptionSettings() {
   const [saved, setSaved] = useState('');
   const [provider, setProvider] = useState('');
+  const [savedContext, setSavedContext] = useState('');
+  const [context, setContext] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -115,6 +117,8 @@ function TranscriptionSettings() {
     api.transcriptionSetting().then((setting) => {
       setSaved(setting.provider);
       setProvider(setting.provider);
+      setSavedContext(setting.context_provider);
+      setContext(setting.context_provider);
     }).catch((e) => setError(e.message));
   }, []);
 
@@ -124,8 +128,10 @@ function TranscriptionSettings() {
     setError('');
     setMessage('');
     try {
-      const setting = await api.setTranscriptionProvider(provider);
+      const setting = await api.setTranscriptionProvider(provider, context);
       setSaved(setting.provider);
+      setSavedContext(setting.context_provider);
+      setContext(setting.context_provider);
       setMessage('Moteur enregistré.');
     } catch (e) {
       setError(e.message);
@@ -148,10 +154,23 @@ function TranscriptionSettings() {
             <option value="openai">OpenAI</option>
           </select>
         </label>
-        <Bouton type="submit" disabled={!saved || saved === provider || saving}>Enregistrer</Bouton>
+        <label className="ekn-label">
+          Contexte, titre et noms
+          <select className="ekn-input" value={provider === 'openai' ? 'openai' : context}
+            disabled={!saved || saving || provider === 'openai'}
+            onChange={(event) => { setContext(event.target.value); setMessage(''); }}>
+            {!saved ? <option value="">—</option> : null}
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </label>
+        <Bouton type="submit"
+          disabled={!saved || (saved === provider && savedContext === context) || saving}>Enregistrer</Bouton>
       </div>
       <p className="ekn-help mt-2" id="transcription-setting-help">
-        S’applique aux nouvelles transcriptions et recherches de contexte de l’équipe.
+        S’applique aux nouvelles transcriptions de l’équipe. Le moteur écoute la réunion ; la
+        recherche du dossier Odoo, le titre et les noms peuvent passer par OpenAI, dont les crédits
+        sont inclus.
       </p>
       <Erreur>{error}</Erreur>
       {message ? <p role="status" className="ekn-help mt-2">{message}</p> : null}

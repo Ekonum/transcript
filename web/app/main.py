@@ -220,6 +220,7 @@ class TokenRequest(BaseModel):
 
 class TranscriptionSetting(BaseModel):
     provider: Literal["gemini", "hydrogen", "openai"]
+    context_provider: Literal["gemini", "openai"] | None = None
 
 
 class VocabularyRecord(BaseModel):
@@ -350,18 +351,30 @@ def create_app(
     gemini_models = {entry["id"] for entry in CLOUD_TRANSCRIPTION_MODELS
                      if entry.get("provider") == "gemini"}
 
-    # The engines an administrator can choose. Context search follows OpenAI
-    # only for the OpenAI engine; both Gemini engines keep it on Gemini.
+    # The engines an administrator can choose for transcription.
     engines = {"gemini": DEFAULT_CLOUD_MODEL, "hydrogen": HYDROGEN_MODEL,
                "openai": DIARIZE_MODEL}
+
+    def context_provider() -> str:
+        """Who runs context search (probe, Odoo investigation) and the text
+        steps (title, names, corrections). OpenAI by default since 22/11: the
+        team has free OpenAI credits, and on the 22/11 bench these are
+        reasoning tasks where OpenAI does not lose quality. Listening stays
+        with the transcription engine."""
+        chosen = db.team_setting("context_provider")
+        if chosen:
+            return chosen
+        if config.openai_context:
+            return "openai"
+        return "openai" if config.context_default == "openai" else "gemini"
 
     def engine_selection() -> tuple[str, bool]:
         selected = db.transcription_provider()
         if selected in engines:
-            return engines[selected], selected == "openai"
-        openai_transcription = config.openai_transcription
-        return ((DIARIZE_MODEL if openai_transcription else DEFAULT_CLOUD_MODEL),
-                config.openai_context)
+            model = engines[selected]
+        else:
+            model = DIARIZE_MODEL if config.openai_transcription else DEFAULT_CLOUD_MODEL
+        return model, model == DIARIZE_MODEL or context_provider() == "openai"
 
     def models_for(default_model: str) -> set[str]:
         return gemini_models | {DIARIZE_MODEL} if default_model == DIARIZE_MODEL else gemini_models
@@ -1606,20 +1619,26 @@ def create_app(
     def transcription_setting(_: int = Depends(transcription_admin)) -> dict:
         default_model, _ = engine_selection()
         engine = next((name for name, model in engines.items() if model == default_model), "gemini")
-        return {"provider": engine}
+        return {"provider": engine,
+                "context_provider": "openai" if engine == "openai" else context_provider()}
 
     @app.put("/api/admin/transcription")
     def update_transcription_setting(
         payload: TranscriptionSetting, owner_id: int = Depends(transcription_admin),
     ) -> dict:
-        provider_keys = openai_keys if payload.provider == "openai" else keys
-        try:
-            if not provider_keys.get():
-                raise SecretError("Clé vide.")
-        except SecretError as exc:
-            raise HTTPException(503, "La clé de ce moteur est indisponible dans le coffre.") from exc
+        wanted_context = payload.context_provider or context_provider()
+        for provider_keys in {openai_keys if payload.provider == "openai" else keys,
+                              openai_keys if wanted_context == "openai" else keys}:
+            try:
+                if not provider_keys.get():
+                    raise SecretError("Clé vide.")
+            except SecretError as exc:
+                raise HTTPException(503, "La clé de ce moteur est indisponible dans le coffre.") from exc
         db.set_transcription_provider(payload.provider, owner_id)
-        return {"provider": payload.provider}
+        if payload.context_provider:
+            db.set_team_setting("context_provider", payload.context_provider, owner_id)
+        return {"provider": payload.provider,
+                "context_provider": "openai" if payload.provider == "openai" else context_provider()}
 
     @app.get("/api/me/stats")
     def my_stats(

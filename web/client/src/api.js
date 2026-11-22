@@ -62,7 +62,9 @@ export const api = {
   },
   me: () => call('GET', '/api/me'),
   transcriptionSetting: () => call('GET', '/api/admin/transcription'),
-  setTranscriptionProvider: (provider) => call('PUT', '/api/admin/transcription', { provider }),
+  setTranscriptionProvider: (provider, contextProvider) => call('PUT', '/api/admin/transcription', {
+    provider, ...(contextProvider ? { context_provider: contextProvider } : {}),
+  }),
   myStats: (period) => call('GET', `/api/me/stats?period=${encodeURIComponent(period)}`),
   reenrichir: (id, dossier = {}) => call('POST', `/api/jobs/${id}/enrich`, dossier),
   odooStatus: () => call('GET', '/api/me/odoo'),
