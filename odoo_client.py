@@ -641,6 +641,15 @@ def search_meeting_events(
 # is rich HTML (``<p>``, ``<a>``, etc.) which adds noise to the LLM
 # prompt budget for zero benefit; the LLM works better on plain text.
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+# Cells, paragraphs and line breaks separate words: stripped without a
+# separator, an Odoo table « <td>Module Kärcher</td><td>S00107</td> »
+# became « Module KärcherS00107 », which then landed in the glossary.
+_HTML_BREAK_RE = re.compile(
+    r"<\s*(?:br|/p|/div|/li|/tr|/h[1-6]|/blockquote|/ul|/ol|/table)\b[^>]*>", re.IGNORECASE
+)
+_HTML_CELL_RE = re.compile(r"<\s*/?\s*(?:td|th)\b[^>]*>", re.IGNORECASE)
+# Odoo writes Python's empty values into some generated tables.
+_EMPTY_CELL_RE = re.compile(r"(?<![\w-])(?:None|False)(?![\w-])")
 _HTML_ENTITY_RE = re.compile(r"&(?:nbsp|amp|lt|gt|quot|#\d+);")
 _WS_RUN_RE = re.compile(r"[ \t]+")
 _NL_RUN_RE = re.compile(r"\n{3,}")
@@ -649,7 +658,12 @@ _NL_RUN_RE = re.compile(r"\n{3,}")
 def _html_to_text(raw: str) -> str:
     if not raw:
         return ""
-    text = _HTML_TAG_RE.sub("", str(raw))
+    text = _HTML_BREAK_RE.sub("\n", str(raw))
+    # « | » between cells: the glossary's name regex joins words across
+    # a space, never across a bar.
+    text = _HTML_CELL_RE.sub(" | ", text)
+    text = _HTML_TAG_RE.sub("", text)
+    text = _EMPTY_CELL_RE.sub("", text)
     # Translate the handful of HTML entities that crop up in Odoo
     # bodies. Anything beyond ``&nbsp; &amp; &lt; &gt; &quot;`` and
     # numeric refs is rare enough to ignore — the LLM tolerates it.
@@ -658,8 +672,10 @@ def _html_to_text(raw: str) -> str:
     ).replace("&gt;", ">").replace("&quot;", '"')
     text = _HTML_ENTITY_RE.sub("", text)
     text = _WS_RUN_RE.sub(" ", text)
+    text = re.sub(r"(?:\| *)+\|", "|", text)          # empty cells
+    text = re.sub(r"[ |]*\n[ |]*", "\n", text)        # bars at line edges
     text = _NL_RUN_RE.sub("\n\n", text)
-    return text.strip()
+    return text.strip(" |\n")
 
 
 # Fields we ask ``mail.message.read`` for. Author is a Many2one we
