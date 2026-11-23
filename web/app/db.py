@@ -323,6 +323,9 @@ class Database:
             ("video_file_id", "TEXT"),
             ("video_bytes", "INTEGER"),
             ("video_session", "TEXT"),
+            # Bytes already relayed to storage for the upload in progress:
+            # where a resumable (tus) upload picks up after a network cut.
+            ("video_received", "INTEGER"),
             ("video_uploaded_at", "TEXT"),
             ("video_lectures", "INTEGER NOT NULL DEFAULT 0"),
             ("archived_at", "TEXT"),
@@ -1428,6 +1431,22 @@ class Database:
                 "UPDATE recovered_sources SET original_trashed_at = ? WHERE source = ? AND external_id = ?",
                 (datetime.now().isoformat(timespec="seconds"), source, external_id),
             )
+
+    def mobile_job(self, owner_id: int, sha256: str) -> dict[str, Any] | None:
+        """The meeting already created for this recording from a phone:
+        creating an upload twice must not create two meetings."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE owner_id = ? AND deleted_at IS NULL "
+                "AND json_extract(context_json, '$.recovered_from') = 'mobile' "
+                "AND json_extract(context_json, '$.checksum') = ? ORDER BY id LIMIT 1",
+                (owner_id, sha256),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_video_received(self, job_id: int, received: int) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE jobs SET video_received = ? WHERE id = ?", (int(received), job_id))
 
     def unfinished_mac_job(self, owner_id: int, checksum: str) -> dict[str, Any] | None:
         """La réunion créée pour un envoi depuis le Mac et restée sans

@@ -22,7 +22,14 @@ export default function App() {
   const [vue, setVue] = useState(
     () => (new URLSearchParams(window.location.search).get('recovery') ? 'recuperation' : 'bibliotheque'),
   );
-  const [ouvert, setOuvert] = useState(null);
+  // « ?reunion=<id> » : the link the phone app shows once a recording is
+  // handed over. It opens that meeting, then the URL goes back to « / ».
+  const [ouvert, setOuvert] = useState(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('reunion'));
+    if (!Number.isInteger(id) || id <= 0) return null;
+    window.history.replaceState({}, '', '/');
+    return id;
+  });
   // Le mot cherché dans la bibliothèque suit la réunion ouverte : on la
   // découvre déjà surlignée là où il apparaît.
   const [cherche, setCherche] = useState('');
