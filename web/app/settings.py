@@ -136,6 +136,8 @@ class Settings:
     keycloak_authorized_party: str = ""
     keycloak_jwks_url: str = ""
     keycloak_link_legacy: bool = False
+    # The phone app's Keycloak client: accepted on /api/mobile/* only.
+    keycloak_device_party: str = "ekonum-device"
     # Cloud Storage : dès qu'un bucket est nommé, tout ce qui arrive y va ;
     # le Drive partagé ne sert plus qu'à relire ce qui n'a pas migré.
     gcs_bucket: str = ""
@@ -169,6 +171,7 @@ class Settings:
             keycloak_authorized_party=os.environ.get("EKOVIDEO_KEYCLOAK_AUTHORIZED_PARTY", "").strip(),
             keycloak_jwks_url=os.environ.get("EKOVIDEO_KEYCLOAK_JWKS_URL", "").strip(),
             keycloak_link_legacy=_flag("EKOVIDEO_KEYCLOAK_LINK_LEGACY"),
+            keycloak_device_party=os.environ.get("EKOVIDEO_KEYCLOAK_DEVICE_PARTY", "ekonum-device").strip(),
             access_team_domain=team,
             access_aud=os.environ.get("EKOVIDEO_ACCESS_AUD", "").strip(),
             broker_url=_broker_url(),

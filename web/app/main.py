@@ -58,6 +58,7 @@ from .audio_parts import audio_parts
 from . import avancement
 from .auth import AccessVerifier, AuthError, KeycloakVerifier
 from .oidc import OidcLogin, pkce_pair, safe_next
+from .mobile import register_mobile_routes
 from .user_identity import IdentityConflict
 from .chatter import ChatterError, composer
 from .coffre import Coffre, CoffreIndisponible
@@ -324,6 +325,7 @@ def create_app(
     verifier: AccessVerifier | None = None,
     keycloak_verifier: KeycloakVerifier | None = None,
     oidc_login: OidcLogin | None = None,
+    device_verifier: KeycloakVerifier | None = None,
     odoo_factory=None,
     stockage_factory=None,
     google_opener=None,
@@ -2183,6 +2185,16 @@ def create_app(
         item=config.google_secret_item,
         field=config.google_secret_field,
     )
+    if keycloak is not None:
+        # The phone app's client, on /api/mobile/* only (web/app/mobile.py).
+        register_mobile_routes(
+            app, db=db, config=config, storage=stockage, meeting_date=_date_reunion,
+            verifier=device_verifier or KeycloakVerifier(
+                config.keycloak_issuer, config.keycloak_audience,
+                config.keycloak_device_party, config.keycloak_jwks_url,
+                jwk_client=keycloak._client()),
+        )
+
     register_recovery_routes(
         app,
         db=db,
