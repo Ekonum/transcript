@@ -69,6 +69,8 @@ def _settings(root: Path, **overrides) -> Settings:
         dev_mode=True,
         dev_user_email="robin@ekonum.fr",
         dev_api_key="cle-de-test",
+        # The suite simulates Gemini; OpenAI context has its own tests.
+        context_default="gemini",
     )
     base.update(overrides)
     return Settings(**base)

@@ -280,7 +280,11 @@ Dans « Mon compte », un administrateur choisit le moteur des nouvelles
 transcriptions de l'équipe : Gemini 3.8 Flash, Gemini 4 Hydrogen (réflexion
 légère, plus fidèle sur le banc du 20/11, environ quatre fois plus cher
 aujourd'hui) ou OpenAI. Avec OpenAI, la recherche de contexte passe aussi chez
-OpenAI ; avec les deux moteurs Gemini, elle reste sur Gemini Flash. Cette
+OpenAI. Un second choix, « Contexte, titre et noms », décide qui fait la
+recherche du dossier Odoo, le titre, les noms et les corrections : OpenAI par
+défaut depuis le 22/11 (crédits inclus, aucune perte sur ces tâches de
+raisonnement au banc), Gemini sinon. `EKOVIDEO_CONTEXT_PROVIDER=gemini` change
+ce défaut tant qu'aucun choix n'est enregistré. Cette
 préférence est conservée en base et prend le pas sur les deux options
 d'environnement. Ces deux options restent valables tant qu'aucun choix n'a
 été enregistré. Le serveur vérifie que la clé du moteur est accessible au
