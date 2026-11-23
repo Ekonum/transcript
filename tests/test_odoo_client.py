@@ -444,6 +444,26 @@ class ChatterHelpersTest(unittest.TestCase):
         )
         self.assertEqual(out, "Bonjour Robin, la migration est validée.")
 
+    def test_html_to_text_keeps_cells_and_paragraphs_apart(self):
+        # An Odoo table pasted in the chatter: cells stripped without a
+        # separator used to glue into « Module KärcherS00107 ».
+        out = _html_to_text(
+            "<p>Suivi</p><table><tr><th>Nom</th><th>Commande</th></tr>"
+            "<tr><td>Module Kärcher</td><td>S00107</td><td>None</td></tr></table>"
+            "<p>Robin<br>Izaak</p>"
+        )
+        self.assertEqual(out, "Suivi\nNom | Commande\nModule Kärcher | S00107\n\nRobin\nIzaak")
+
+    def test_glossary_does_not_join_table_cells(self):
+        body = _html_to_text(
+            "<table><tr><td>Module Kärcher</td><td>Acquisition</td></tr></table><p>Robin</p><p>Izaak</p>"
+        )
+        terms = extract_odoo_glossary_candidates({"display_name": "S00107 - SANNITEC", "body": body}, [])
+        self.assertIn("Module Kärcher", terms)
+        self.assertNotIn("Module Kärcher Acquisition", terms)
+        self.assertNotIn("Robin Izaak", terms)
+        self.assertFalse([t for t in terms if "None" in t])
+
     def test_html_to_text_handles_none_and_blank(self):
         self.assertEqual(_html_to_text(""), "")
         self.assertEqual(_html_to_text(None), "")  # type: ignore[arg-type]
