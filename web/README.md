@@ -237,6 +237,28 @@ réunion : à quelques secondes près, l'envoi part ; au-delà, on demande
 confirmation, sans interdire (une transcription rognée est plus courte que
 son fichier). Un envoi interrompu ne bloque pas le suivant.
 
+### Enregistrements remis par l'application téléphone
+
+L'application Ekonum (Android) capte la réunion et la remet ; tout le reste
+se passe ici. Routes (`web/app/mobile.py`), ouvertes **seulement en mode
+`keycloak-jwt`** : en mode Access, lier un compte à Keycloak priverait son
+propriétaire de l'application web.
+
+| Route | Rôle |
+|---|---|
+| `OPTIONS /api/mobile/recordings` | Annonce tus 1.0, extensions `creation` et `checksum` (sha256), taille maximale |
+| `POST /api/mobile/recordings` | Crée l'envoi : `Upload-Length`, `Upload-Metadata` (`filename`, `filetype`, `sha256` obligatoire, `recorded_at`, `duration`). Même personne et même sha256 : le même envoi est rendu |
+| `HEAD /api/mobile/recordings/{id}` | `Upload-Offset` : où reprendre après une coupure |
+| `PATCH /api/mobile/recordings/{id}` | Un morceau à `Upload-Offset`, au plus 16 Mio, multiple de 256 Kio sauf le dernier ; `Upload-Checksum: sha256 …` vérifié (460 sinon) |
+| `POST /api/mobile/recordings/{id}/done` | 409 tant que tout n'est pas reçu ; sinon le lien `/?reunion=<id>` et le texte de la notification que le téléphone affiche tel quel. Le téléphone n'efface son fichier qu'après cette réponse |
+
+Le jeton est celui de la personne : `aud` = transcript, `azp` =
+`ekonum-device` (`EKOVIDEO_KEYCLOAK_DEVICE_PARTY`), admis sur ces routes
+seulement. La réunion arrive « Récupérée, à transcrire » ; « Retraiter » la
+lance depuis le navigateur. Format conseillé : AAC-LC mono 32 kHz 48 kbit/s
+en ADTS, 4 h au plus. Reste à déclarer ces routes dans le manifeste dès que
+le portail permettra d'y ouvrir une exception Cloudflare Access.
+
 ### Rodage sans intervention
 
 `?source=/chemin` charge un fichier servi par le serveur au lieu de
