@@ -261,6 +261,20 @@ CREATE TABLE IF NOT EXISTS recovered_sources (
 );
 CREATE INDEX IF NOT EXISTS idx_recovered_checksum ON recovered_sources (checksum);
 
+-- La migration des vidéos de Drive vers Cloud Storage : ce qui est passé,
+-- et quand l'original Drive a été effacé — seulement après un délai, la
+-- copie GCS ayant fait ses preuves.
+CREATE TABLE IF NOT EXISTS storage_migrations (
+    job_id           INTEGER NOT NULL,  -- sans clé étrangère : une réunion purgée laisse encore un original Drive à effacer
+    drive_id         TEXT NOT NULL,
+    gcs_id           TEXT NOT NULL,
+    size_bytes       INTEGER,
+    md5              TEXT,
+    migrated_at      TEXT NOT NULL,
+    drive_deleted_at TEXT,
+    PRIMARY KEY (job_id, drive_id)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
     text,
     job_id       UNINDEXED,
@@ -779,6 +793,54 @@ class Database:
             conn.execute(
                 "UPDATE jobs SET video_session = ?, video_bytes = ? WHERE id = ?",
                 (session, int(taille), job_id),
+            )
+
+    # -- migration Drive → Cloud Storage --------------------------------
+
+    def videos_a_migrer(self, prefixe_gcs: str) -> list[dict]:
+        """Les réunions dont la vidéo, entière, est encore dans Drive — la
+        corbeille comprise : une réunion restaurée retrouve sa vidéo."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, filename, video_file_id, video_bytes FROM jobs "
+                "WHERE video_file_id IS NOT NULL AND video_file_id != '' "
+                "AND video_session IS NULL AND substr(video_file_id, 1, ?) != ? ORDER BY id",
+                (len(prefixe_gcs), prefixe_gcs),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def basculer_video(self, job_id: int, drive_id: str, gcs_id: str, taille: int, md5: str | None) -> bool:
+        """Remplace l'identifiant Drive par l'objet GCS, si personne n'a
+        changé la vidéo entre-temps. ``False`` : la copie est orpheline."""
+        with self.connect() as conn:
+            changed = conn.execute(
+                "UPDATE jobs SET video_file_id = ? WHERE id = ? AND video_file_id = ? "
+                "AND video_session IS NULL",
+                (gcs_id, job_id, drive_id),
+            ).rowcount
+            if changed:
+                conn.execute(
+                    "INSERT OR REPLACE INTO storage_migrations "
+                    "(job_id, drive_id, gcs_id, size_bytes, md5, migrated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (job_id, drive_id, gcs_id, taille, md5,
+                     datetime.now(timezone.utc).isoformat(timespec="seconds")),
+                )
+        return bool(changed)
+
+    def originaux_drive_a_effacer(self, avant: str) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT job_id, drive_id, gcs_id FROM storage_migrations "
+                "WHERE drive_deleted_at IS NULL AND migrated_at < ? ORDER BY migrated_at",
+                (avant,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def original_drive_efface(self, job_id: int, drive_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE storage_migrations SET drive_deleted_at = ? WHERE job_id = ? AND drive_id = ?",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"), job_id, drive_id),
             )
 
     def terminer_envoi_video(self, job_id: int, fichier_id: str) -> str | None:

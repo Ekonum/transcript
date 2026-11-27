@@ -67,9 +67,10 @@ from .db import Database
 from .fx import EuroRate
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import BrokerAuth, GeminiKey, SecretError
-from .identite import IdentiteGoogle
 from .recovery import register_recovery_routes
-from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
+from .stockage import (
+    MORCEAU, StockageIndisponible, stockage_depuis,
+)
 from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter, enqueter_confirme
 from .sonde import FENETRE_SECONDES, identifier
 from .openai_text import CONTEXT_AUDIO_MODEL, DIARIZE_MODEL, REVIEW_MODEL, TEXT_MODEL, OpenAITextClient, text_cost
@@ -421,20 +422,12 @@ def create_app(
         if not stockage_configure():
             raise StockageIndisponible("Stockage vidéo non configuré.")
         if "instance" not in etat_stockage:
-            etat_stockage["instance"] = DriveStockage(
-                IdentiteGoogle(
-                    chemin_cle=config.gcp_cle,
-                    fournisseur=config.gcp_fournisseur,
-                    compte=config.gcp_compte,
-                    emetteur=config.public_url,
-                    portee=PORTEE_DRIVE,
-                ),
-                config.video_dossier,
-            )
+            etat_stockage["instance"] = stockage_depuis(config)
         return etat_stockage["instance"]
 
     def stockage_configure() -> bool:
-        return bool(config.gcp_fournisseur and config.gcp_compte and config.video_dossier)
+        return bool(config.gcp_fournisseur and config.gcp_compte
+                    and (config.video_dossier or config.gcs_bucket))
 
     def stockage_disponible() -> bool:
         return stockage_factory is not None or stockage_configure()

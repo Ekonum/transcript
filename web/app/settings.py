@@ -138,6 +138,9 @@ class Settings:
     keycloak_link_legacy: bool = False
     # The phone app's Keycloak client: accepted on /api/mobile/* only.
     keycloak_device_party: str = "ekonum-device"
+    # Cloud Storage : dès qu'un bucket est nommé, tout ce qui arrive y va ;
+    # le Drive partagé ne sert plus qu'à relire ce qui n'a pas migré.
+    gcs_bucket: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -195,6 +198,7 @@ class Settings:
             gcp_compte=os.environ.get("EKOVIDEO_GCP_COMPTE", "").strip(),
             gcp_cle=Path(os.environ.get("EKOVIDEO_GCP_CLE", state / "identite-google.pem")),
             video_dossier=os.environ.get("EKOVIDEO_VIDEO_DOSSIER", "").strip(),
+            gcs_bucket=os.environ.get("EKOVIDEO_GCS_BUCKET", "").strip(),
             google_client_id=os.environ.get("EKOVIDEO_GOOGLE_CLIENT_ID", "").strip(),
             google_domain=os.environ.get("EKOVIDEO_GOOGLE_DOMAIN", "ekonum.fr").strip(),
             google_secret_item=os.environ.get(

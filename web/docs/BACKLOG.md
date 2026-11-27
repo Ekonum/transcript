@@ -106,7 +106,7 @@ ou donnée réelle modifiée. Voir [le périmètre et les preuves](KEYCLOAK-IDEN
 | 2 bis | Garder en base les erreurs du navigateur | prêt |
 | 3 | Un serveur MCP | prêt (les jetons d'API existent) |
 | 4 | Supprimer l'original en local après envoi | prêt |
-| 5 | Stockage des vidéos : passer de Google Drive à GCS | quand Odoo en aura besoin |
+| 5 | Stockage des vidéos : passer de Google Drive à GCS | code prêt, bucket à créer |
 | 6 | Migrer les vidéos existantes du Drive | en grande partie fait |
 
 ## Accès Odoo relayé par le broker
@@ -164,8 +164,14 @@ jamais en silence.
 utiliser pour ses pièces jointes. À terme, une vidéo de réunion devrait
 pouvoir vivre à côté du dossier client, dans Odoo, sans copie.
 
-**Pourquoi pas tout de suite** : on démarre sur un Drive partagé, qui ne
-demande aucun compte de facturation GCP de plus. Le compte de service créé
+**Où on en est (23/11)** : Ekonum a maintenant un compte de facturation
+Google Cloud. `GcsStockage`, le mélange Drive + GCS le temps de la bascule,
+la commande de migration et `bin/provisionner_gcs.sh` sont prêts (voir
+STOCKAGE-VIDEO.md, « Cloud Storage »). Restent à faire : créer le bucket,
+poser `EKOVIDEO_GCS_BUCKET`, puis migrer.
+
+**Pourquoi on avait attendu** : on a démarré sur un Drive partagé, qui ne
+demandait aucun compte de facturation GCP de plus. Le compte de service créé
 pour Drive est **le même** que celui dont Odoo aura besoin pour GCS : le
 travail d'identité est déjà fait.
 
